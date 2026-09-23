@@ -25,11 +25,11 @@ const MIME: Record<string, string> = {
  * 部署子路径 —— 必须与 vite.config.ts 的 base 一致。
  *
  * GitHub Pages 把仓库部署在 /<repo>/ 下，所以产物里的 assets 引用是
- * `/richi-score/assets/...`。如果这里把 dist 挂在根路径，那些引用会 404，
+ * `/riichi-score/assets/...`。如果这里把 dist 挂在根路径，那些引用会 404，
  * 后面所有「读 JS/CSS 内容」的检查会集体假失败 ——
  * 看起来像功能坏了，其实只是服务器挂错了地方。
  */
-const BASE_PATH = "/richi-score";
+const BASE_PATH = "/riichi-score";
 
 const server = createServer(async (req, res) => {
   const urlPath = decodeURIComponent((req.url ?? "/").split("?")[0]);
@@ -57,19 +57,6 @@ const server = createServer(async (req, res) => {
 
 await new Promise<void>((r) => server.listen(PORT, "127.0.0.1", r));
 const base = `http://127.0.0.1:${PORT}${BASE_PATH}`;
-
-/**
- * 把 index.html 里的资源引用规范化成「相对部署根」的路径。
- *
- * ⚠️ 两种写法都要支持：
- *   绝对：/richi-score/assets/x.js  →  /assets/x.js
- *   相对：./assets/x.js             →  /assets/x.js
- *
- *    以前只处理了 `./`，因为那时 base 是相对的。用户把 base 改成绝对路径后
- *    这里没跟着改，于是拼成 `/richi-score/richi-score/assets/...` → 404，
- *    后面所有「读 JS/CSS 内容」的检查集体假失败 ——
- *    看起来像功能全坏了，其实只是路径拼错了。
- */
 function toDeployPath(ref: string): string {
   if (ref.startsWith(BASE_PATH)) return ref.slice(BASE_PATH.length);
   if (ref.startsWith("./")) return "/" + ref.slice(2);
