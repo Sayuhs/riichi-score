@@ -1,0 +1,157 @@
+/**
+ * 全局样式变量与基础样式。
+ *
+ * ## 设计方向：波普风（Pop Art）
+ *
+ * 波普风的关键特征，这里逐条落实：
+ *  1. **高饱和撞色** —— 而不是低饱和的"高级灰"。主色用亮橘、亮黄、亮青。
+ *  2. **粗黑描边** —— 所有元素带 2~3px 实心黑边，像漫画分镜格。
+ *  3. **硬阴影（无模糊）** —— 阴影是实心色块 offset，不是模糊光晕。
+ *     这是波普/新粗野主义最标志性的一点。
+ *  4. **圆角克制** —— 用小圆角或直角，不做 iOS 那种大圆润。
+ *  5. **底色带图案** —— 用网点（halftone）或斜纹，模拟漫画印刷。
+ *
+ * ## 为什么背景不能是纯白
+ *
+ * 牌的底板是浅色（Red 套素材的牌面是米白 #f5f0eb）。
+ * 如果页面背景也是白，白牌会重新融进背景 —— 这正是之前踩过的坑
+ * （见 tile-images.ts 的说明）。所以背景用**米黄 + 网点**，把牌托起来。
+ */
+
+:root {
+  /* ---- 波普调色板：高饱和、互不和谐 ---- */
+  --pop-orange: #ff6b35;
+  --pop-yellow: #ffd23f;
+  --pop-cyan: #22b8cf;
+  --pop-pink: #ff4d94;
+  --pop-green: #34c759;
+  --pop-purple: #845ef7;
+
+  /* 主色：亮橘（最跳的那个） */
+  --accent: var(--pop-orange);
+  --accent-ink: #1a1a1a;
+
+  /* ---- 背景：米黄 + 网点，托起浅色牌面 ---- */
+  --bg: #fdf6e3;
+  --bg-dot: #e8dcc0;
+
+  /* ---- 卡片 ---- */
+  --card: #fffdf7;
+  --card-alt: #fff4d6;
+
+  /* ---- 粗黑描边（波普的标志）---- */
+  --ink: #1a1a1a;
+  --line: 2px;
+  --line-bold: 3px;
+
+  /* ---- 硬阴影：实心色块，无模糊 ---- */
+  --shadow-hard: 3px 3px 0 var(--ink);
+  --shadow-hard-sm: 2px 2px 0 var(--ink);
+
+  /* ---- 牌 ---- */
+  --tile-border: #1a1a1a;
+
+  /* ---- 状态色 ---- */
+  --ok-bg: #b2f2bb;
+  --warn-bg: #ffe066;
+  --err-ink: #d6336c;
+
+  --radius: 6px;
+  --radius-sm: 4px;
+
+  color-scheme: light;
+  font-family:
+    system-ui,
+    -apple-system,
+    "Segoe UI",
+    "Noto Sans SC",
+    "PingFang SC",
+    "Microsoft YaHei",
+    sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  color: var(--ink);
+  /* 波普底：米黄 + 网点，模拟漫画印刷的半调网点 */
+  background-color: var(--bg);
+  background-image: radial-gradient(var(--bg-dot) 1px, transparent 1px);
+  background-size: 8px 8px;
+  /* 手机上避免点击时的蓝色高亮块 */
+  -webkit-tap-highlight-color: transparent;
+  -webkit-text-size-adjust: 100%;
+  /* ⚠️ 防横向抖动：任何子元素意外超出宽度时，不出现横向滚动条。
+     没有这一条的话，内容一变宽整个页面就会左右晃。 */
+  overflow-x: hidden;
+}
+
+/* 全局：滚动条占位稳定，避免出现/消失时内容横向位移。
+   Windows 上滚动条占约 15px，牌表从"无滚动条"变"有滚动条"时
+   会突然窄 15px，牌就挤到下一行 —— 这也是抖动的来源之一。 */
+.scroll,
+.pane,
+.settings-wrap,
+.sheet-body,
+.body {
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+}
+
+/* ---- 通用卡片：粗黑边 + 硬阴影，这是波普风的骨架 ---- */
+.card {
+  background: var(--card);
+  border: var(--line) solid var(--ink);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-hard);
+  padding: 8px;
+}
+
+/* ---- 通用按钮 ---- */
+.btn {
+  font-size: 12px;
+  font-weight: 700;
+  padding: 6px 10px;
+  border: var(--line) solid var(--ink);
+  background: #fff;
+  color: var(--ink);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  box-shadow: var(--shadow-hard-sm);
+  transition: transform 0.06s ease, box-shadow 0.06s ease;
+  /* 让文字有点印刷味道 */
+  letter-spacing: 0.01em;
+}
+
+.btn:active {
+  /* 按下去 = 阴影消失 + 位移，物理感 */
+  transform: translate(2px, 2px);
+  box-shadow: 0 0 0 var(--ink);
+}
+
+.btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+  box-shadow: var(--shadow-hard-sm);
+  transform: none;
+}
+
+.btn-primary {
+  background: var(--accent);
+}
+.btn-yellow {
+  background: var(--pop-yellow);
+}
+.btn-cyan {
+  background: var(--pop-cyan);
+}

@@ -1,0 +1,45 @@
+{
+  "name": "riichi-score-app",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "日麻赛后算番算分工具 —— 单机离线 H5（自用）",
+  "packageManager": "pnpm@10.11.1",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --experimental-strip-types src/score/__tests__/run.ts && node --experimental-strip-types src/score/__tests__/m1.test.ts && node --experimental-strip-types src/ui/__tests__/m2.test.ts && node --experimental-strip-types src/ui/__tests__/m2-rev.test.ts && node --experimental-strip-types src/ui/__tests__/m3.test.ts && node --experimental-strip-types src/ui/__tests__/m3-polish.test.ts && node --experimental-strip-types src/ui/__tests__/yaku-guide.test.ts && node --experimental-strip-types src/ui/__tests__/render.test.ts",
+    "test:honba": "node --experimental-strip-types src/score/__tests__/run.ts",
+    "test:m1": "node --experimental-strip-types src/score/__tests__/m1.test.ts",
+    "test:m2": "node --experimental-strip-types src/ui/__tests__/m2.test.ts",
+    "test:interaction": "node --experimental-strip-types src/ui/__tests__/m2-rev.test.ts",
+    "test:m3": "node --experimental-strip-types src/ui/__tests__/m3.test.ts",
+    "test:polish": "node --experimental-strip-types src/ui/__tests__/m3-polish.test.ts",
+    "test:yaku": "node --experimental-strip-types src/ui/__tests__/yaku-guide.test.ts",
+    "test:render": "node --experimental-strip-types src/ui/__tests__/render.test.ts",
+    "verify:build": "node --experimental-strip-types scripts/verify-build.ts",
+    "verify:pwa": "node --experimental-strip-types scripts/verify-pwa.ts",
+    "verify:offline": "node --experimental-strip-types scripts/verify-offline.ts",
+    "verify": "pnpm run verify:build && pnpm run verify:pwa && pnpm run verify:offline",
+    "gen:icons": "node --experimental-strip-types scripts/gen-icons.ts",
+    "gen:preview": "node --experimental-strip-types scripts/gen-tile-preview.ts",
+    "analyze:tiles": "node --experimental-strip-types scripts/analyze-tiles.ts",
+    "crosscheck": "node --experimental-strip-types src/score/__tests__/crosscheck2.ts",
+    "typecheck": "tsc --noEmit",
+    "dev": "vite",
+    "dev:host": "vite --host",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "riichi-score": "^3.0.0"
+  },
+  "devDependencies": {
+    "@sacckey/mahjong": "^0.4.0",
+    "@vitejs/plugin-vue": "^6.0.9",
+    "typescript": "^5.9.0",
+    "vite": "^7.3.6",
+    "vue": "^3.5.43"
+  }
+}

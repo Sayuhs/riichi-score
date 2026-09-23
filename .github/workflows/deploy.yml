@@ -1,0 +1,80 @@
+name: Deploy to GitHub Pages
+
+# 什么时候部署：
+#  - 推到 main 分支（就是日常改完就上）
+#  - 也可以在 Actions 页面手动点一下触发
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# GitHub Pages 需要的权限
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# 同时只跑一个部署。不取消进行中的那个 ——
+# 让正在跑的那次部署完，避免留下半截状态。
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 取代码
+        uses: actions/checkout@v4
+
+      - name: 装 pnpm
+        uses: pnpm/action-setup@v4
+        # 版本从 package.json 的 packageManager 字段读，不重复声明
+
+      - name: 装 Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: 装依赖
+        run: pnpm install --frozen-lockfile
+
+      # 先跑检查，任何一项失败就不部署 —— 避免把坏版本推上线
+      - name: 类型检查
+        run: pnpm run typecheck
+
+      - name: 跑测试
+        run: pnpm run test
+
+      - name: 构建
+        run: pnpm run build
+
+      # 三道验证，任何一道失败都不部署 —— 避免把坏版本推上线
+      - name: 验收构建产物
+        run: pnpm run verify:build
+
+      - name: 验收 PWA 配置
+        run: pnpm run verify:pwa
+
+      - name: 验收离线能力
+        run: pnpm run verify:offline
+
+      - name: 配置 Pages
+        uses: actions/configure-pages@v5
+
+      - name: 上传产物
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: 部署到 Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
