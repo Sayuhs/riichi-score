@@ -32,10 +32,10 @@ function excludeDevFiles(files: string[]): Plugin {
 /**
  * Vite 配置。
  *
- * ## base: 绝对路径 /richi-score/
+ * ## base: 绝对路径 /riichi-score/
  *
  * ⚠️ 这个值**必须和 GitHub 仓库名一致**（仓库就是 Sayuhs/riichi-score），
- *    因为 GitHub Pages 把它部署在 https://<user>.github.io/richi-score/ 。
+ *    因为 GitHub Pages 把它部署在 https://<user>.github.io/riichi-score/ 。
  *
  *    历史：一开始写的是相对路径 ./ ，那样理论上能部署到任意子路径、
  *    也不用预先知道仓库名；后来改成了现在这个绝对值（commit 修改baseurl）。
