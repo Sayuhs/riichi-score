@@ -1,58 +1,86 @@
-name: Deploy Vite site to Pages
+name: Deploy to GitHub Pages
 
+# 什么时候部署：
+#  - 推到 main 分支（就是日常改完就上）
+#  - 也可以在 Actions 页面手动点一下触发
 on:
   push:
-    branches: ["main"]
+    branches: [main]
   workflow_dispatch:
 
+# GitHub Pages 需要的权限
 permissions:
   contents: read
   pages: write
   id-token: write
 
+# 同时只跑一个部署。不取消进行中的那个 ——
+# 让正在跑的那次部署完，避免留下半截状态。
 concurrency:
-  group: "pages"
+  group: pages
   cancel-in-progress: false
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: 取代码
         uses: actions/checkout@v4
 
-      - name: Setup pnpm
+      - name: 装 pnpm
         uses: pnpm/action-setup@v4
-        with:
-          version: 9 # 如果需要特定版本，可以在这里改
+        # 版本从 package.json 的 packageManager 字段读，不重复声明
 
-      - name: Setup Node
+      - name: 装 Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
-          cache: 'pnpm'
+          node-version: 22
+          cache: pnpm
 
-      - name: Install dependencies
-        run: pnpm install
+      - name: 装依赖
+        run: pnpm install --frozen-lockfile
 
-      - name: Build
-        run: pnpm build
+      # 先跑检查，任何一项失败就不部署 —— 避免把坏版本推上线
+      - name: 类型检查
+        run: pnpm run typecheck
 
-      - name: Setup Pages
-        uses: actions/configure-pages@v4
+      - name: 跑测试
+        run: pnpm run test
 
-      - name: Upload artifact
+      - name: 构建
+        run: pnpm run build
+
+      # 三道验证，任何一道失败都不部署 —— 避免把坏版本推上线
+      - name: 验收构建产物
+        run: pnpm run verify:build
+
+      - name: 验收 PWA 配置
+        run: pnpm run verify:pwa
+
+      - name: 验收离线能力
+        run: pnpm run verify:offline
+
+      # 布局预算检查：断言「牌有多高」和「槽有多高」是同一来源。
+      # 这次的「页面像被裁剪」「门前牌被裁」都是这两者错配导致的，
+      # 而它们都溜过了单元测试和 verify:build（后者只查类名存在与否）。
+      - name: 验收布局预算
+        run: pnpm run verify:layout
+
+      - name: 配置 Pages
+        uses: actions/configure-pages@v5
+
+      - name: 上传产物
         uses: actions/upload-pages-artifact@v3
         with:
-          path: ./dist # 这里指定你的 Vite 打包输出目录
+          path: dist
 
   deploy:
+    needs: build
+    runs-on: ubuntu-latest
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
-    runs-on: ubuntu-latest
-    needs: build
     steps:
-      - name: Deploy to GitHub Pages
+      - name: 部署到 Pages
         id: deployment
         uses: actions/deploy-pages@v4
