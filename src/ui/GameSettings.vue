@@ -17,14 +17,24 @@
  *
  * 3. 波普风：和 M2 一致的粗黑边 + 硬阴影 + 高饱和底色。
  */
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import {
   ALL_SEATS,
+  canWinOnFirstTurn,
   isDealer,
-  parseIndicatorInput,
   SEAT_LABELS,
   type GameState,
 } from "./game-state.ts";
+import {
+  MAX_INDICATORS,
+  SELECTABLE_KINDS,
+  canPick,
+  removeIndicator,
+  toggleIndicator,
+  uradoraEnabled,
+  type IndicatorState,
+} from "./dora-picker.ts";
+import TileImage from "./TileImage.vue";
 
 const props = defineProps<{
   game: GameState;
@@ -32,6 +42,14 @@ const props = defineProps<{
   isMenzen: boolean;
   /** 副露组数（决定天和/地和能不能点） */
   meldCount: number;
+  /**
+   * 手牌 + 副露里每种牌的张数（键是归一后的牌面，如 `"5m"`）。
+   *
+   * 用来实现「同一张牌（手牌 + 副露 + 表宝 + 里宝）≤ 4 张」——
+   * 引擎会校验这条，但它吐的是英文 `A tile appears more than four times`，
+   * 所以我们提前把已经用满的牌种禁掉。
+   */
+  handCounts: Record<string, number>;
   /** 校验出的问题，用于禁用/标红对应字段 */
   issues: { field: string; message: string }[];
 }>();
@@ -53,26 +71,73 @@ function issueOf(field: string): string {
   return props.issues.find((i) => i.field === field)?.message ?? "";
 }
 
-// ---------------------------------------------------------------- 宝牌
+// ---------------------------------------------------------------- 宝牌指示牌
+//
+// ## 为什么改成牌面点选，而不是继续用文本框
+//
+// 原来的文本框有一个**修不干净**的 bug：
+//   v-model 绑在 computed 上，getter 返回 state 的拼接、setter 解析后回写。
+//   解析失败时不更新 state → getter 立刻回吐旧值（空串）
+//   → Vue 的 `beforeUpdate` 每次重渲染都把 DOM 覆盖回空串
+//   → **逐键打进去的字符全部被吞**（只有一次性粘贴完整串才成功）。
+//   更糟的是那个「格式错误」提示是**死代码**，永远不会亮 ——
+//   用户只看到字消失，得不到任何反馈。
+//
+// 改成点选后，那套 getter/setter 整个消失，问题从「修」变成「不存在」。
+//
+// ## 规则在哪
+//
+// 全在 `dora-picker.ts`（纯函数，有 24 条测试）。
+// 因为引擎对指示牌**几乎不校验**（实测：6 张、8 张都照收，非法牌面静默忽略），
+// 所以「最多 5 张」「表里一一对应」「同一张牌 ≤ 4」全靠那一层挡。
 
-const doraText = computed({
-  get: () => props.game.doraIndicators.join(""),
-  set: (v: string) => {
-    const { tiles } = parseIndicatorInput(v);
-    patch({ doraIndicators: tiles });
-  },
-});
+/** 当前展开的是哪个选择器（null = 都收起） */
+const openPicker = ref<null | "dora" | "uradora">(null);
 
-const uradoraText = computed({
-  get: () => props.game.uradoraIndicators.join(""),
-  set: (v: string) => {
-    const { tiles } = parseIndicatorInput(v);
-    patch({ uradoraIndicators: tiles });
-  },
-});
+/** 上一次点选失败的提示（如「里宝不能超过表宝」） */
+const pickerNotice = ref<string | null>(null);
 
-const doraError = computed(() => parseIndicatorInput(doraText.value).error);
-const uradoraError = computed(() => parseIndicatorInput(uradoraText.value).error);
+const indicatorState = computed<IndicatorState>(() => ({
+  dora: props.game.doraIndicators,
+  uradora: props.game.uradoraIndicators,
+}));
+
+/** 手牌 + 副露里某张牌有几张 —— 供「同一张牌 ≤ 4」的合并计数用 */
+const countInHand = (kind: string) => props.handCounts[kind] ?? 0;
+
+/** 里宝整块能不能操作（未立直、或还没选表宝时锁死） */
+const uradoraOk = computed(() =>
+  uradoraEnabled(
+    indicatorState.value,
+    props.game.isRiichi || props.game.isDoubleRiichi,
+  ),
+);
+
+/** 某张牌在当前状态下能不能选（用于把不能选的置灰） */
+function canPickTile(which: "dora" | "uradora", tile: string): boolean {
+  return canPick(which, tile, indicatorState.value, countInHand).ok;
+}
+
+/** 点一下牌表里的牌：已选的删掉，没选的加上 */
+function toggleDora(which: "dora" | "uradora", tile: string) {
+  const r = toggleIndicator(indicatorState.value, which, tile, countInHand);
+  pickerNotice.value = r.notice;
+  // 两个字段都提交 —— 删表宝可能会顺带截短里宝（保持表里一一对应）
+  patch({
+    doraIndicators: r.state.dora,
+    uradoraIndicators: r.state.uradora,
+  });
+}
+
+/** 点已选牌上的 ✕：删掉它 */
+function removeDoraAt(which: "dora" | "uradora", index: number) {
+  const next = removeIndicator(indicatorState.value, which, index);
+  pickerNotice.value = null;
+  patch({
+    doraIndicators: next.dora,
+    uradoraIndicators: next.uradora,
+  });
+}
 
 // ---------------------------------------------------------------- 开关
 
@@ -94,7 +159,18 @@ const flags = computed<
   const tsumo = props.game.winType === "tsumo";
   const ron = props.game.winType === "ron";
   const menzen = props.isMenzen;
-  const dealer = isDealer(props.game);
+
+  // ⚠️ 天和/地和的前提用共享函数算，**不能用 `menzen`**。
+  //
+  //    暗杠虽然仍是「门清」（立直、门前清自摸和都还成立），
+  //    但它确实是一次鸣牌 —— 杠了要从岭上摸牌，
+  //    所以那一局不可能同时是天和/地和。
+  //
+  //    以前这里用 menzen 判断，而 `validateGameState` 用 `meldCount > 0`，
+  //    结果纯暗杠手牌时界面允许勾天和、勾完立刻报错。
+  //    现在两边共用 `canWinOnFirstTurn`，不可能再各自漂移。
+  const firstTurn = canWinOnFirstTurn(props.game, { meldCount: props.meldCount });
+
   return [
     {
       key: "isRiichi",
@@ -121,14 +197,14 @@ const flags = computed<
     {
       key: "isTenhou",
       label: "天和",
-      disabled: !tsumo || !menzen || !dealer,
-      why: "天和必须亲家自摸且门清",
+      disabled: !firstTurn.tenhou,
+      why: "天和必须亲家自摸，且整局无人鸣牌（含暗杠）",
     },
     {
       key: "isChiihou",
       label: "地和",
-      disabled: !tsumo || !menzen || dealer,
-      why: "地和必须闲家自摸且门清",
+      disabled: !firstTurn.chiihou,
+      why: "地和必须闲家自摸，且整局无人鸣牌（含暗杠）",
     },
   ];
 });
@@ -287,40 +363,143 @@ const discarderOptions = computed(() =>
       </p>
     </section>
 
-    <!-- ===== 宝牌 ===== -->
+    <!-- ===== 宝牌指示牌 ===== -->
+    <!--
+      用牌面点选，不用文本框（文本框那个「打不进字」的 bug 已经删掉了）。
+      点＋在卡片内展开牌表（内联展开，不开弹窗）——
+      宝牌通常只有 1 张，为一次点击开弹窗太重。
+    -->
     <section class="card">
       <span class="card-title">宝牌指示牌</span>
-      <div class="grid2">
-        <label class="field">
-          <span class="lbl">表宝牌</span>
-          <input
-            v-model="doraText"
-            class="txt"
-            :class="{ bad: !!doraError }"
-            placeholder="如 13m"
-            spellcheck="false"
-          />
-          <span v-if="doraError" class="sub bad">{{ doraError }}</span>
-          <span v-else class="sub">按天凤记法，如 1m 3p</span>
-        </label>
 
-        <label class="field">
-          <span class="lbl">里宝牌</span>
-          <input
-            v-model="uradoraText"
-            class="txt"
-            :class="{ bad: !!uradoraError }"
-            placeholder="如 2s"
-            spellcheck="false"
-            :disabled="!game.isRiichi && !game.isDoubleRiichi"
+      <!-- 表宝牌 -->
+      <div class="ind-row">
+        <!--
+          标签和箭头在**同一个按钮**里：
+            · 视觉上是一体的，不会各占一块显得零散
+            · 字号天然一致（箭头用 em 定尺寸，跟着标签文字走）
+            · 点击区从一个小箭头变成整个标签，好点得多
+        -->
+        <button
+          type="button"
+          class="ind-label"
+          :class="{ on: openPicker === 'dora' }"
+          :aria-expanded="openPicker === 'dora'"
+          @click="openPicker = openPicker === 'dora' ? null : 'dora'"
+        >
+          <span>表宝牌</span>
+          <svg class="chev" viewBox="0 0 14 9" aria-hidden="true">
+            <path
+              d="M1.5 1.75 L7 7.25 L12.5 1.75"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2.2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+          </svg>
+        </button>
+        <div class="ind-tiles">
+          <TileImage
+            v-for="(t, i) in game.doraIndicators"
+            :key="`d${i}`"
+            :tile="t"
+            size="sm"
+            show-label
+            clickable
+            title="点一下删掉"
+            @pick="removeDoraAt('dora', i)"
           />
-          <span v-if="uradoraError" class="sub bad">{{ uradoraError }}</span>
-          <span v-else-if="!game.isRiichi && !game.isDoubleRiichi" class="sub">
-            只在立直时翻开
+          <span v-if="game.doraIndicators.length >= MAX_INDICATORS" class="sub">
+            已满 {{ MAX_INDICATORS }} 张
           </span>
-          <span v-else class="sub">立直时才能看</span>
-        </label>
+        </div>
       </div>
+      <!-- 表宝牌的选择表（内联展开） -->
+      <!-- 选择表：flex 排列，超过容器宽度自动换行。
+           不用 grid，因为这里不需要「均分列宽」—— 牌保持固定的
+           34px（够大的点击目标，减少误触），放不下就换行。 -->
+      <div v-if="openPicker === 'dora'" class="ind-picker">
+        <TileImage
+          v-for="t in SELECTABLE_KINDS"
+          :key="t"
+          :tile="t"
+          size="md"
+          show-label
+          clickable
+          :dim="!canPickTile('dora', t)"
+          @pick="toggleDora('dora', t)"
+        />
+      </div>
+
+      <!-- 里宝牌 -->
+      <div class="ind-row">
+        <!-- 标签 + 箭头同在一个按钮里，理由同表宝牌。
+             未立直时整块禁用（disabled 的按钮点不动）。 -->
+        <button
+          type="button"
+          class="ind-label"
+          :class="{ on: openPicker === 'uradora' }"
+          :aria-expanded="openPicker === 'uradora'"
+          :disabled="!uradoraOk"
+          @click="openPicker = openPicker === 'uradora' ? null : 'uradora'"
+        >
+          <span>里宝牌</span>
+          <svg class="chev" viewBox="0 0 14 9" aria-hidden="true">
+            <path
+              d="M1.5 1.75 L7 7.25 L12.5 1.75"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2.2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+          </svg>
+        </button>
+        <div class="ind-tiles">
+          <template v-if="uradoraOk">
+            <TileImage
+              v-for="(t, i) in game.uradoraIndicators"
+              :key="`u${i}`"
+              :tile="t"
+              size="sm"
+              show-label
+              clickable
+              title="点一下删掉"
+              @pick="removeDoraAt('uradora', i)"
+            />
+            <span v-if="game.uradoraIndicators.length >= game.doraIndicators.length" class="sub">
+              已与表宝一致
+            </span>
+          </template>
+          <!-- 未立直 / 还没选表宝时整块锁死，顺便把规则告诉用户 -->
+          <span v-else class="sub">
+            {{ game.isRiichi || game.isDoubleRiichi ? "先选表宝牌" : "只在立直时翻开" }}
+          </span>
+        </div>
+      </div>
+      <!-- 里宝牌的选择表 -->
+      <!-- 选择表：flex 排列，超过容器宽度自动换行。
+           不用 grid，因为这里不需要「均分列宽」—— 牌保持固定的
+           34px（够大的点击目标，减少误触），放不下就换行。 -->
+      <div v-if="openPicker === 'uradora'" class="ind-picker">
+        <TileImage
+          v-for="t in SELECTABLE_KINDS"
+          :key="t"
+          :tile="t"
+          size="md"
+          show-label
+          clickable
+          :dim="!canPickTile('uradora', t)"
+          @pick="toggleDora('uradora', t)"
+        />
+      </div>
+
+      <!-- 点选被拒绝的原因（如「里宝不能超过表宝」） -->
+      <p v-if="pickerNotice" class="sub bad ind-notice">{{ pickerNotice }}</p>
+      <p v-else class="sub ind-notice">
+        最多 {{ MAX_INDICATORS }} 张（初始 1 张 + 最多 4 次杠）· 表里张数一一对应
+      </p>
     </section>
   </div>
 </template>
@@ -460,9 +639,6 @@ const discarderOptions = computed(() =>
   cursor: pointer;
   color: var(--ink);
 }
-.step:active {
-  transform: translate(1px, 1px);
-}
 
 .step-val {
   flex: 1 1 auto;
@@ -527,27 +703,108 @@ const discarderOptions = computed(() =>
   content: "⚠ ";
 }
 
-/* ---- 文本输入 ---- */
-.txt {
-  width: 100%;
-  padding: 5px 6px;
-  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
-  font-size: 13px;
-  border: 1.5px solid var(--ink);
-  border-radius: var(--radius-sm);
-  background: #fff;
-  color: var(--ink);
+/* ---- 宝牌指示牌的点选器 ----
+   原来的文本框样式（.txt / .txt:disabled / .txt.bad）已随文本框一起删除 ——
+   那是「打不进字」那个 bug 的载体。 */
+
+.ind-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+/* 已选指示牌那一行 */
+.ind-tiles {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px;
+  min-height: 26px;
+  flex: 1 1 auto;
   min-width: 0;
-  /* ⚠️ box-sizing 已在全局设置，但这里再声明一次以防万一 ——
-     不加的话输入框会因 padding/border 撑宽容器，造成横向抖动 */
-  box-sizing: border-box;
 }
-.txt:disabled {
-  opacity: 0.45;
+
+/* 「标签 + 展开箭头」——同一个按钮。
+ *
+ * 为什么合在一起（而不是把箭头放在牌后面）：
+ *   · 两半分开时，标签和箭头各占一块、视觉零散
+ *   · 合起来后字号天然一致（箭头用 em，跟着这个 font-size 走）
+ *   · 点击区从一个小箭头变成整个标签，好点得多
+ *
+ * 也去掉了 :active —— 这里不需要，而且旁边就是牌，
+ * 按下去的位移会让人以为牌也在动。
+ */
+.ind-label {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 0;
+  border: none;
+  background: none;
+  /* ⚠️ 字号必须和 .lbl 一致 —— 这样箭头（用 em 定尺寸）
+     才会和标签文字一样高，看起来是一体的。 */
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1;
+  color: var(--ink);
+  cursor: pointer;
+  white-space: nowrap;
 }
-.txt.bad {
-  border-color: var(--err-ink);
-  background: #fff0f4;
+
+/* 未立直时禁用（里宝牌） */
+.ind-label:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+.ind-label:disabled .chev {
+  /* 禁用时也不该有「可展开」的暗示 */
+  opacity: 0;
+}
+
+/* 箭头：用 em 定尺寸，跟着上面的 font-size 自动对齐 */
+.ind-label .chev {
+  width: 0.85em;
+  height: auto;
+  display: block;
+  /* 只旋转 svg，不动按钮盒子 —— 不会引起任何重排 */
+  transition: transform 0.15s ease;
+}
+
+/* 展开时箭头翻过来 */
+.ind-label.on .chev {
+  transform: rotate(180deg);
+}
+
+/* 展开时标签加个下划线，状态更明确（不靠颜色，避免和禁用态混淆）*/
+.ind-label.on {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+/* 内联展开的牌表：**flex 排列，超过容器宽度自动换行**。
+   不用 grid —— 这里不需要「均分列宽」，牌保持固定的 34px
+   （够大的点击目标，不容易误触），放不下就换行。
+   注：不设 overflow-x —— 换行已经保证不会横向溢出，
+   留个滚动条反而会在换行和滚动之间摇摆。 */
+.ind-picker {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 6px;
+  margin-bottom: 4px;
+  background: #fff;
+  border: 2px dashed var(--ink);
+  border-radius: var(--radius-sm);
+}
+
+/* （.ind-picker-row 已删除：选择表改成 flex-wrap，不再需要分行） */
+
+/* 提示行：固定最小高度，避免出现/消失时卡片高度跳 */
+.ind-notice {
+  margin: 0;
+  min-height: 15px;
 }
 
 .mt {

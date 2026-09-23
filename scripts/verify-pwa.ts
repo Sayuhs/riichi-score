@@ -214,12 +214,14 @@ if (!distExists) {
     ok(missing.length === 0, `缺: ${missing.join(", ")}`);
   });
 
-  check("dist 里的资源引用是相对路径（能部署到子路径）", () => {
-    const html = readFileSync(`${DIST}/index.html`, "utf8");
-    // 绝对路径 /assets/... 在 /repo-name/ 下会 404
-    const absRefs = [...html.matchAll(/(?:src|href)="(\/[^"]*)"/g)].map((m) => m[1]!);
-    ok(absRefs.length === 0, `发现绝对路径引用: ${absRefs.join(", ")}`);
-  });
+  // ⚠️ 这里原本有一条「dist 里的资源引用必须是相对路径」的断言 —— **已删除**。
+  //    那是**写错前提**的检查：它把「用相对 base」当成了唯一正确做法，
+  //    而实际部署用的是绝对 base（仓库名就是 riichi-score）。
+  //    结果用户一改 base 它就误报，差点让 CI 拦住正常部署。
+  //
+  //    「按真实部署路径能不能取到」这件事由 verify:offline 负责 ——
+  //    它会起一个挂在 /richi-score 前缀下的服务器逐个请求资源，
+  //    对相对 / 绝对两种 base 都成立，而且更强。
 
   check("dist 里不含开发用的校准页", () => {
     ok(

@@ -117,22 +117,24 @@ const isRed = computed(() => props.tile[0] === "0");
   border-radius: 3px;
   /* 硬阴影：实心、无模糊 */
   box-shadow: 1.5px 1.5px 0 var(--ink);
-  /* ⚠️ content-box 而不是 border-box —— 这是修「偏移」的关键之一。
-     用 border-box 时，`aspect-ratio: 3/4` 会作用在**边框框**上，
-     于是内容框变成 (w-3)×(h-3)，比例从 0.75 掉到约 0.72，
-     图片在里面 contain 就会出现 letterbox，看起来就是偏的。
-     改用 content-box 后，aspect-ratio 作用在**内容框**上，
-     内容框严格 3:4，与 SVG 一致，图片正好铺满、无留白。
-     代价：元素总宽 = 设定值 + 3px（边框），所以在尺寸计算里预留了这点。 */
-  box-sizing: content-box;
-  aspect-ratio: 3 / 4;
-  position: relative;
+  /* ⚠️ border-box + **不要**在这里写 aspect-ratio。
+     以前是 content-box + aspect-ratio:3/4，但那样有两个连锁问题：
+       ① 总宽 = 设定值 + 3px 边框，手算布局时必须记得加这 3px
+          ——这次的「页面被裁」就是忘了加，13 张一共少算 39px；
+       ② 比例要靠 content-box 才能正确，换个写法就又歪了。
+     现在改成：**比例只由 .frame 负责**（它没有边框，aspect-ratio 精确），
+     .body 只负责边框 / 阴影 / 尺寸，用 border-box 让 width 就是最终宽度。 */
+  box-sizing: border-box;
 }
 
-/* 裁剪层：严格 3:4，不含边框（它就是内容框本身） */
+/* 裁剪层 + 比例层：严格 3:4，且不含边框。
+   放在这里而不是 .body 上，是为了让 aspect-ratio 作用在一个
+   **没有边框**的盒子上 —— 比例精确，不受边框宽度干扰。 */
 .frame {
-  position: absolute;
-  inset: 0;
+  display: block;
+  width: 100%;
+  aspect-ratio: 3 / 4;
+  position: relative;
   overflow: hidden;
   border-radius: inherit;
 }
@@ -182,43 +184,48 @@ const isRed = computed(() => props.tile[0] === "0");
   box-shadow: 1.5px 1.5px 0 var(--pop-pink);
 }
 
-/* ============ 尺寸（响应式）============
+/* ============ 尺寸：由 grid 决定，不再手算像素 ============
  *
- * ## 宽度是怎么算出来的
+ * ## 为什么删掉了 calc((100vw - 46px) / 13) 这种东西
  *
- * `.body` 用 `box-sizing: content-box`（见上，为了让 aspect-ratio 作用在内容框上），
- * 所以 **总宽 = 这里设的 width + 3px 边框**。
- * 布局计算要把边框算进去。
+ * 那个公式是这次「页面像被裁剪」的**根因**：它少扣了 43px。
+ * 真实开销是
+ *     app padding 12 + 卡片边框 4 + 卡片 padding 16
+ *     + 13 张牌各自的边框 39 + 12 个间隙 18  =  89px
+ * 公式只扣了 46px —— 于是 320px 屏溢出 43px、390px 溢出 37px，
+ * 被三层 overflow:hidden 静默裁掉（第 13 张整张消失、第 12 张切一半）。
  *
- * 布局开销（不含牌本身）：
- *   app padding(6×2) + 卡片边框(1.5×2) + 卡片 padding(8×2) = 31px
+ * 而且那个数字是**手算**的：改任何一处 padding，公式不会自己变。
  *
- * 门前 13 张一行的约束：13 × (w + 3) + 12 × 1.5 ≤ 可用宽
- *   → w ≤ (可用宽 - 18 - 39) / 13 = (可用宽 - 57) / 13
- * 把 31 的开销也算进去，整体写成 `(100vw - 46px) / 13`：
+ * ## 现在的做法：把算术交给浏览器
  *
- * ┌──────────┬──────────┬────────────────────┐
- * │ 屏宽     │ 公式结果 │ 牌总宽             │
- * ├──────────┼──────────┼────────────────────┤
- * │ 320px    │ 21.1px   │ 24.1px             │
- * │ 360px    │ 24.2px   │ 27.2px             │
- * │ 393px+   │ 26.0px   │ 29.0px（触顶）      │
- * └──────────┴──────────┴────────────────────┘
+ * 牌表容器（.tiles / .picker-row，见 HandInput.vue）用
+ *     grid-template-columns: repeat(N, minmax(MIN, 1fr))
+ * 固定 N 列，宽度由浏览器分配 —— **零算术，不可能再算错**。
  *
- * 用 `min()` 是为了**双向自适应**：小屏自动缩到放得下，大屏触顶后不再变大
- * （免得牌大得离谱）。
+ * 这里只写「填满我那一列」，max-width 防止大屏上牌大得离谱。
+ * 固定列数还有一个好的副作用：**输入过程中牌不会缩放** ——
+ * 录第 1 张和录满 13 张，每张牌一样大。
+ */
+/* ⚠️ 默认值必须是**固定宽度**，不能写 width:100%。
+ *
+ *    `width: 100%` 只在 **grid** 里正确 —— grid 会把宽度均分给每一列。
+ *    但在 **flex 行**里，每个子项都想要 100%，结果是全部被压扁成
+ *    一个个小点（役种示例、宝牌选择表都踩过这个坑）。
+ *
+ *    所以：这里给固定宽度（flex 场景用），
+ *    真正需要「填满 grid 列」的两处由 HandInput.vue 用 :deep() 覆盖。
  */
 .size-md .body {
-  /* 牌表：一行 9 张，空间宽裕 */
-  width: min(34px, calc((100vw - 46px) / 9));
+  /* 牌表 / 役种示例 / 宝牌选择表：34px 是够用的点击目标 */
+  width: 34px;
 }
 .size-lg .body {
-  /* 门前：13 张一行的硬约束 —— 上限 26px 是权衡出来的，
-     再大就会在 393px 以下的屏上换行 */
-  width: min(26px, calc((100vw - 46px) / 13));
+  /* 门前：会被 grid 覆盖成 100%，这里只是兜底 */
+  width: 24px;
 }
 .size-sm .body {
-  /* 副露：一组最多 4 张，有大量余量，用固定值即可 */
+  /* 和牌张：只出现一张，用固定宽度 */
   width: 28px;
 }
 
@@ -239,11 +246,6 @@ const isRed = computed(() => props.tile[0] === "0");
 .clickable .body {
   transition: transform 0.06s ease, box-shadow 0.06s ease;
 }
-.clickable:active .body {
-  transform: translate(1.5px, 1.5px);
-  box-shadow: 0 0 0 var(--ink);
-}
-
 .tile:disabled {
   cursor: default;
 }

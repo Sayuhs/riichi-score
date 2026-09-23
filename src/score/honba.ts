@@ -10,7 +10,14 @@
  */
 import type { Payment, Seat, WinContext } from "./types";
 
-const ALL_SEATS: Seat[] = ["east", "south", "west", "north"];
+/**
+ * 四个座位，固定顺序（东南西北）。
+ *
+ * 导出是为了让显示层（如 ScoreResultView）复用同一份顺序，
+ * 而不是各自再写一个 `["east","south","west","north"]` ——
+ * 顺序写错会让支付明细的行序错乱，而且不会被任何测试发现。
+ */
+export const ALL_SEATS: Seat[] = ["east", "south", "west", "north"];
 
 export function isDealer(context: Pick<WinContext, "seatWind">): boolean {
   return context.seatWind === "east";

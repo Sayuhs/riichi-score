@@ -174,7 +174,6 @@ const noticeClass = computed(() => {
             v-if="state.winningTile"
             :tile="state.winningTile"
             size="sm"
-            show-label
             clickable
             @pick="removeWinning"
           />
@@ -307,7 +306,12 @@ const noticeClass = computed(() => {
   flex-direction: column;
 }
 .slot-win .winning-body {
-  height: 28px;
+  /* 牌宽 28px（border-box）→ 内容 25px → 3:4 高 33.33px + 边框 3px
+     + 硬阴影 1.5px ≈ 37.8px。原来写 28px，牌上下各溢出 11px、
+     压住了「和牌张」标题（它没有 overflow:hidden，所以是溢出不是裁切）。
+     这是个固定值（和牌张永远是 28px），所以仍然是「固定高度」——
+     防抖动不受影响。 */
+  height: 38px;
   display: flex;
   align-items: center;
   gap: 5px;
@@ -318,10 +322,23 @@ const noticeClass = computed(() => {
   flex-direction: column;
 }
 .slot-hand .slot-body {
-  height: 30px;
+  /* ⚠️ 这里是「门前牌被裁」的现场。原来写死 height: 30px，
+     而牌高 = 牌宽 × 4/3 + 3px 边框。
+     牌宽从写死的 21px 变成响应式后能到 26px → 牌高 37.67px，
+     于是上下各被裁 3.83px（连 1.5px 的硬阴影也一起被吃掉）。
+
+     现在高度**从容器宽度派生**，和牌宽用同一个来源 —— 不可能再错配。
+     cqw 是「容器 inline 尺寸的 1%」，容器在 .card-hand 上声明。
+     高度只随视口变、不随手牌状态变，所以防抖动仍然成立。 */
+  height: 44px; /* 回退：不支持容器查询单位时用 */
+  height: calc((min(26px, (100cqw - 18px) / 13) - 3px) * 4 / 3 + 4.5px);
   display: flex;
   align-items: center;
-  overflow: hidden;
+  /* 竖直方向裁掉亚像素溢出（好东西，保留）；
+     水平方向改成可滚动 —— 宁可让你滑一下看全，也不要静默少一张。 */
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
 }
 
 .slot-notice {
@@ -367,16 +384,54 @@ const noticeClass = computed(() => {
   }
 }
 
-/* 门前：白卡 */
+/* 门前：白卡 + 容器查询的锚点 */
 .card-hand {
   background: var(--card);
+  /* ⚠️ 让 .slot-body 的 cqw 单位以**这张卡片的内容宽**为基准。
+     这样槽高就能从「实际可用宽度」派生，和牌宽用同一个来源 ——
+     不会像以前那样「牌宽改了、槽高没跟着改」。 */
+  container-type: inline-size;
 }
 
-/* 门前牌一行排开不换行（13 张必须放下，320px 屏也不换行） */
+/* 门前牌：固定 13 列的 grid —— **不换行、也不手算宽度**。
+   列宽由浏览器分配，所以「13 张放不下」这件事在数学上不可能发生。
+   minmax(16px, 1fr) 的下限是保险：屏幕窄到每张不足 16px 时才溢出，
+   那时由 .slot-body 的横向滚动兜底（而不是静默裁掉）。
+   固定 13 列还保证了录入过程中牌不会缩放。 */
 .tiles {
-  display: flex;
-  flex-wrap: nowrap;
+  display: grid;
+  grid-template-columns: repeat(13, minmax(16px, 1fr));
   gap: 1.5px;
+  width: 100%;
+}
+
+/* grid 的子项要填满自己那一列。
+   两层覆盖：
+     .tile  —— TileImage 里默认 width:fit-content
+     .body  —— TileImage 里默认是**固定宽度**（那是给 flex 场景的），
+              在 grid 里必须改回 100% 才能均分列宽。
+   特异性 (0,3,0) 高于 TileImage 内部的 (0,2,0)，所以能稳定覆盖。 */
+.tiles :deep(.tile),
+.picker-row :deep(.tile) {
+  width: 100%;
+}
+/* ⚠️ 这里必须带上中间的 .tile 一层，让特异性高过 TileImage 里的默认值。
+ *
+ *    默认：`.size-lg .body[data-v-A]`          → 特异性 (0,3,0)
+ *    覆盖：`.tiles[data-v-B] .tile .size-lg .body` → (0,4,0)  ✅
+ *
+ *    如果写成 `.tiles[data-v-B] .size-lg .body` 也是 (0,3,0)，
+ *    就和默认值**打平** —— 谁赢只看 CSS 顺序。
+ *    那样一旦导入顺序变了，门前的牌会退回固定宽度、重新溢出。
+ *    加上 `.tile` 这一层就与顺序无关了。
+ */
+.tiles :deep(.tile .size-lg .body) {
+  width: 100%;
+  max-width: 26px;
+}
+.picker-row :deep(.tile .size-md .body) {
+  width: 100%;
+  max-width: 34px;
 }
 
 .hint {
@@ -401,10 +456,12 @@ const noticeClass = computed(() => {
   padding: 2px 0;
 }
 
+/* 牌表：固定 9 列。和门前同一套做法 —— 手算宽度这种事不再存在。 */
 .picker-row {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(9, minmax(22px, 1fr));
   gap: 1.5px;
-  justify-content: center;
+  width: 100%;
 }
 
 /* ---------------- 提示（常驻占位）---------------- */

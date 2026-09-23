@@ -26,6 +26,17 @@ const ROOT = join(process.cwd(), "dist");
 const PORT = 8139;
 
 /**
+ * 部署子路径 —— 必须与 vite.config.ts 的 base 一致。
+ *
+ * GitHub Pages 把仓库部署在 https://<user>.github.io/<repo>/ ，
+ * 所以本站的真实路径就是 /richi-score/ 。
+ *
+ * ⚠️ 服务器**只在这个前缀下**提供文件。这样一旦 base 配错、
+ *    或者仓库改了名，资源就会 404 —— 和线上表现一致，立刻暴露。
+ */
+const BASE_PATH = "/richi-score";
+
+/**
  * MIME 类型表。
  *
  * ⚠️ 关键在于 `.js` 必须是 `text/javascript`。
@@ -46,9 +57,15 @@ const MIME: Record<string, string> = {
 
 const server = createServer(async (req, res) => {
   const urlPath = decodeURIComponent((req.url ?? "/").split("?")[0]!);
-  let rel = urlPath === "/" ? "index.html" : urlPath.replace(/^\/+/, "");
+
+  // 只服务部署子路径下的请求（模拟 GitHub Pages 的 /<repo>/ 前缀）
+  if (!urlPath.startsWith(BASE_PATH)) {
+    res.writeHead(404).end("not found (outside deploy path)");
+    return;
+  }
+  let rel = urlPath.slice(BASE_PATH.length).replace(/^\/+/, "");
   // 目录请求回退到 index.html（模拟 Pages 的行为）
-  if (rel.endsWith("/")) rel += "index.html";
+  if (rel === "" || rel.endsWith("/")) rel += "index.html";
   const filePath = normalize(join(ROOT, rel));
 
   if (!filePath.startsWith(ROOT)) {
@@ -70,7 +87,7 @@ const server = createServer(async (req, res) => {
 });
 
 await new Promise<void>((r) => server.listen(PORT, "127.0.0.1", r));
-const base = `http://127.0.0.1:${PORT}`;
+const base = `http://127.0.0.1:${PORT}${BASE_PATH}`;
 
 let pass = 0;
 let fail = 0;
@@ -247,23 +264,67 @@ await check("全部牌面素材都可达（34 种 + 3 赤 + 牌背）", async ()
 });
 
 // ============================================================
-console.log("\n【4】子路径部署模拟（GitHub Pages 场景）");
 // ============================================================
-// 部署到 https://user.github.io/repo-name/ 时，页面在子路径下。
-// 相对路径的资源引用必须在这种情况仍然正确。
+console.log("\n【4】按真实部署路径访问（GitHub Pages 场景）");
+// ============================================================
+// 服务器**只在 /richi-score 前缀下**提供文件（见文件开头的 BASE_PATH），
+// 所以这一组测试等价于「线上能不能打开」。
+//
+// ⚠️ 这里曾经断言「产物里不许出现绝对路径」—— 那是**写错前提**的检查：
+//    它把「用相对 base」当成了正确做法，而实际部署用的是绝对 base
+//    （仓库名就是 riichi-score）。用户一改 base，这条断言就误报，
+//    还差点让 CI 拦住正常部署。
+//
+//    正确的问法不是「路径长什么样」，而是「按真实路径访问时能不能取到」。
+//    后者对相对 / 绝对两种 base 都成立，而且更强 ——
+//    它同时能抓到「base 写错」「仓库改名」「文件漏了」这三类问题。
 
-await check("在子路径下资源引用仍然正确", async () => {
+await check("首页在部署子路径下可访问", async () => {
+  const r = await fetch(`${base}/`);
+  ok(r.status === 200, `HTTP ${r.status}`);
+  ok((await r.text()).includes('<div id="app">'), "不是应用页面");
+});
+
+await check("页面里引用的每一个资源都能在部署路径下取到", async () => {
   const html = await (await fetch(`${base}/`)).text();
-  // 所有引用都必须是相对的（不以 / 开头）
-  const absRefs: string[] = [];
+  const docUrl = `${base}/`;
+
+  // 把所有 src/href 按「浏览器会怎么解析」解析成绝对 URL（相对、绝对都支持）
+  const refs = new Set<string>();
   for (const m of html.matchAll(/(?:src|href)="([^"]+)"/g)) {
     const ref = m[1]!;
-    if (ref.startsWith("/")) absRefs.push(ref);
+    if (ref.startsWith("data:") || ref.startsWith("http")) continue;
+    refs.add(new URL(ref, docUrl).href);
+  }
+  ok(refs.size > 0, "页面里没找到任何资源引用（检查正则）");
+
+  const missing: string[] = [];
+  for (const ref of refs) {
+    const r = await fetch(ref);
+    if (r.status !== 200) missing.push(`${ref} -> ${r.status}`);
   }
   ok(
-    absRefs.length === 0,
-    `发现绝对路径引用（部署到子路径会 404）: ${absRefs.join(", ")}`,
+    missing.length === 0,
+    [
+      "以下资源在部署路径下取不到（线上会 404）:",
+      "        " + missing.join("\n        "),
+      "  检查 vite.config.ts 的 base 是否与部署路径一致。",
+    ].join("\n"),
   );
+  console.log(`        （检查了 ${refs.size} 个引用）`);
+});
+
+await check("SW 与 manifest 也在部署路径下（否则 PWA 装不上）", async () => {
+  for (const f of ["sw.js", "manifest.webmanifest"]) {
+    const r = await fetch(`${base}/${f}`);
+    ok(r.status === 200, `${f} -> HTTP ${r.status}`);
+  }
+});
+
+await check("访问部署路径之外的地址会 404（证明前缀确实生效）", async () => {
+  // 若这条不 404，说明服务器的前缀检查没生效，前面几条测试就是假绿
+  const r = await fetch(`http://127.0.0.1:${PORT}/sw.js`);
+  ok(r.status === 404, `应为 404，实际 ${r.status}`);
 });
 
 server.close();

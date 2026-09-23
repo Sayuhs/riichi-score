@@ -18,9 +18,19 @@ import HandInput from "./ui/HandInput.vue";
 import GameSettings from "./ui/GameSettings.vue";
 import ScoreResultView from "./ui/ScoreResultView.vue";
 import YakuGuide from "./ui/YakuGuide.vue";
-import { createEmptyHand, isComplete, type HandState } from "./ui/hand-state.ts";
-import { createDefaultGameState, validateGameState, type GameState } from "./ui/game-state.ts";
+import {
+  createEmptyHand,
+  countKind,
+  isComplete,
+  type HandState,
+} from "./ui/hand-state.ts";
+import {
+  createDefaultGameState,
+  validateGameState,
+  type GameState,
+} from "./ui/game-state.ts";
 import { buildHandInput } from "./ui/build-input.ts";
+import { ALL_TILE_KINDS } from "./ui/tile-images.ts";
 import { score } from "./score/index.ts";
 import type { ScoreResult } from "./score/types.ts";
 
@@ -43,7 +53,9 @@ const showSettings = ref(false);
 
 // ---------------- 派生 ----------------
 const meldCount = computed(() => hand.value.melds.length);
-const isMenzen = computed(() => hand.value.melds.every((m) => m.kind === "ankan"));
+const isMenzen = computed(() =>
+  hand.value.melds.every((m) => m.kind === "ankan"),
+);
 const handReady = computed(() => isComplete(hand.value));
 
 const issues = computed(() =>
@@ -54,6 +66,20 @@ const issues = computed(() =>
 );
 
 const canScore = computed(() => handReady.value && issues.value.length === 0);
+
+/**
+ * 手牌 + 副露里每种牌有几张（键是归一后的牌面）。
+ *
+ * 传给场况面板，用来实现「同一张牌（手牌 + 副露 + 表宝 + 里宝）≤ 4 张」——
+ * 引擎会校验这条，但它吐的是英文，所以我们提前把已用满的牌种禁掉。
+ */
+const handCounts = computed(() => {
+  const out: Record<string, number> = {};
+  for (const kind of ALL_TILE_KINDS) {
+    out[kind] = countKind(hand.value, kind);
+  }
+  return out;
+});
 
 // ---------------- 动作 ----------------
 function goSettings() {
@@ -98,7 +124,11 @@ async function doScore() {
  *    界面是给打牌的朋友看的，一句 `Hand has no yaku` 对他们毫无帮助。
  *    原文写进 console 供排查（见调用处）。
  */
-function humanizeError(kind: string): { title: string; detail: string; tips: string[] } {
+function humanizeError(kind: string): {
+  title: string;
+  detail: string;
+  tips: string[];
+} {
   switch (kind) {
     case "no-yaku":
       return {
@@ -135,7 +165,10 @@ function humanizeError(kind: string): { title: string; detail: string; tips: str
       return {
         title: "算番出错",
         detail: "遇到了预期之外的情况。",
-        tips: ["可以试试重新录入手牌", "如果一直失败，可能是这手牌有罕见规则，需要手动算"],
+        tips: [
+          "可以试试重新录入手牌",
+          "如果一直失败，可能是这手牌有罕见规则，需要手动算",
+        ],
       };
   }
 }
@@ -177,6 +210,7 @@ function editGame() {
             :game="game"
             :is-menzen="isMenzen"
             :meld-count="meldCount"
+            :hand-counts="handCounts"
             :issues="issues"
             @update:game="game = $event"
           />
@@ -187,7 +221,9 @@ function editGame() {
     <!-- ===== 构造输入失败：就地提示，不用弹窗 ===== -->
     <p v-if="buildError" class="error-bar">
       {{ buildError }}
-      <button type="button" class="err-close" @click="buildError = null">✕</button>
+      <button type="button" class="err-close" @click="buildError = null">
+        ✕
+      </button>
     </p>
 
     <!-- ===== 底部主操作 ===== -->
@@ -225,7 +261,11 @@ function editGame() {
     />
 
     <!-- 结果：直接弹窗 -->
-    <div v-else-if="sheet.kind === 'result'" class="overlay" @click.self="sheet = { kind: 'none' }">
+    <div
+      v-else-if="sheet.kind === 'result'"
+      class="overlay"
+      @click.self="sheet = { kind: 'none' }"
+    >
       <div class="sheet">
         <div class="grabber" aria-hidden="true"></div>
         <div class="sheet-body">
@@ -238,13 +278,19 @@ function editGame() {
         <div class="sheet-foot">
           <button type="button" class="btn" @click="editHand">改牌</button>
           <button type="button" class="btn" @click="editGame">改场况</button>
-          <button type="button" class="btn btn-primary flex2" @click="nextHand">下一手</button>
+          <button type="button" class="btn btn-primary flex2" @click="nextHand">
+            下一手
+          </button>
         </div>
       </div>
     </div>
 
     <!-- 算番失败 -->
-    <div v-else-if="sheet.kind === 'fail'" class="overlay" @click.self="sheet = { kind: 'none' }">
+    <div
+      v-else-if="sheet.kind === 'fail'"
+      class="overlay"
+      @click.self="sheet = { kind: 'none' }"
+    >
       <div class="sheet">
         <div class="grabber" aria-hidden="true"></div>
         <div class="sheet-body">
@@ -279,9 +325,19 @@ function editGame() {
   display: flex;
   flex-direction: column;
   height: 100dvh;
-  max-width: 480px;
+  max-width: 96%;
+  width: 96%;
   margin: 0 auto;
   overflow: hidden;
+  /* ---- 安全区（刘海屏 / 状态栏）----
+     index.html 开了 viewport-fit=cover，manifest 又是 display:standalone，
+     所以装到手机主屏后内容会**铺到状态栏和刘海底下**。
+     之前只处理了底部（.footer 的 safe-area-inset-bottom），
+     竖屏时顶部那条就被状态栏盖住了 —— 这才是真正意义上的「顶部被裁」。
+     横屏时左右也有安全区，一并补上。 */
+  padding-top: env(safe-area-inset-top);
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
 }
 
 .content {

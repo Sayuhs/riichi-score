@@ -32,12 +32,18 @@ function excludeDevFiles(files: string[]): Plugin {
 /**
  * Vite 配置。
  *
- * ## base: 用相对路径
+ * ## base: 绝对路径 /richi-score/
  *
- * `./` 让所有资源引用都是相对的，这样：
- *  - 部署到 GitHub Pages 的**任意子路径**（`/repo-name/`）都能用
- *  - 不需要预先知道仓库名
- *  - 换域名 / 换路径都不用改配置
+ * ⚠️ 这个值**必须和 GitHub 仓库名一致**（仓库就是 Sayuhs/riichi-score），
+ *    因为 GitHub Pages 把它部署在 https://<user>.github.io/richi-score/ 。
+ *
+ *    历史：一开始写的是相对路径 ./ ，那样理论上能部署到任意子路径、
+ *    也不用预先知道仓库名；后来改成了现在这个绝对值（commit 修改baseurl）。
+ *    代价是**仓库改名就会 404**，所以哪天改了仓库名，这里要跟着改
+ *    （pnpm run verify:offline 会按真实部署路径访问，能抓到这类问题）。
+ *
+ *    注：public/ 里那些手写的路径（manifest、sw 注册、图标）仍是相对写法，
+ *    所以它们是路径无关的；只有 Vite 生成的 assets 引用是绝对的。
  *
  * ## assetsInlineLimit 调大
  *

@@ -14,7 +14,6 @@ import {
   createDefaultGameState,
   isDealer,
   KAMICHA,
-  parseIndicatorInput,
   validateGameState,
   type GameState,
 } from "../game-state.ts";
@@ -212,31 +211,6 @@ await test("合法局面没有问题", () => {
   );
   eq(issues, [], "不该有问题");
 });
-
-// ============================================================
-console.log("\n【3】宝牌指示牌输入解析");
-// ============================================================
-await test("紧凑写法", () => {
-  eq(parseIndicatorInput("13m").tiles, ["1m", "3m"], "两张");
-  eq(parseIndicatorInput("13m").error, null, "无错");
-});
-
-await test("空格写法", () => {
-  eq(parseIndicatorInput("1m 3m").tiles, ["1m", "3m"], "两张");
-});
-
-await test("空输入返回空数组", () => {
-  eq(parseIndicatorInput("").tiles, [], "空");
-  eq(parseIndicatorInput("  ").tiles, [], "纯空格");
-});
-
-await test("非法牌报错", () => {
-  ok(parseIndicatorInput("9z").error !== null, "9z 非法 ");
-  ok(parseIndicatorInput("1m@").error !== null, "含非法字符 ");
-  ok(parseIndicatorInput("12").error !== null, "缺花色 ");
-});
-
-// ============================================================
 console.log("\n【4】接缝：buildHandInput");
 // ============================================================
 await test("手牌不完整时拒绝并说明原因", () => {

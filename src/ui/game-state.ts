@@ -109,6 +109,29 @@ export interface ContextIssue {
   message: string;
 }
 
+/**
+ * 天和 / 地和的前提：自摸，且**整局没有任何鸣牌**。
+ *
+ * ⚠️ 这里必须用 `meldCount === 0`，**不是「门清」**。
+ *
+ *    暗杠不影响门清（有暗杠仍然可以立直、可以算门前清自摸和），
+ *    但它确实是一次鸣牌 —— 杠了要从岭上摸牌，所以那一局不可能同时是天和/地和。
+ *
+ *    两者的区别曾经导致界面与校验不一致：
+ *    界面用「门清」判断 → 纯暗杠手牌时允许勾天和；
+ *    而 `validateGameState` 用 `meldCount > 0` → 勾完立刻报错。
+ *    现在两边共用这个函数，不可能再各自漂移。
+ */
+export function canWinOnFirstTurn(
+  state: Pick<GameState, "winType" | "seatWind">,
+  opts: { meldCount: number },
+): { tenhou: boolean; chiihou: boolean } {
+  if (state.winType !== "tsumo") return { tenhou: false, chiihou: false };
+  if (opts.meldCount > 0) return { tenhou: false, chiihou: false };
+  const dealer = state.seatWind === "east";
+  return { tenhou: dealer, chiihou: !dealer };
+}
+
 export function validateGameState(
   state: GameState,
   opts: { isMenzen: boolean; meldCount: number },
@@ -190,29 +213,17 @@ export function validateGameState(
   return issues;
 }
 
-/** 宝牌指示牌输入的校验（只检查牌本身合法） */
-export function parseIndicatorInput(text: string): { tiles: TileStr[]; error: string | null } {
-  const trimmed = text.replace(/[\s,，]/g, "");
-  if (!trimmed) return { tiles: [], error: null };
-
-  const tiles: TileStr[] = [];
-  let pending: string[] = [];
-
-  for (const ch of trimmed) {
-    if (ch >= "0" && ch <= "9") {
-      pending.push(ch);
-      continue;
-    }
-    if (!["m", "p", "s", "z"].includes(ch)) {
-      return { tiles: [], error: `无法识别的字符 '${ch}'` };
-    }
-    for (const r of pending) {
-      const tile = `${r}${ch}`;
-      if (!isValidTile(tile)) return { tiles: [], error: `'${tile}' 不是合法的牌` };
-      tiles.push(tile);
-    }
-    pending = [];
-  }
-  if (pending.length) return { tiles: [], error: "数字后面缺少花色字母" };
-  return { tiles, error: null };
-}
+/*
+ * 这里原本有一个 `parseIndicatorInput(text)`，用于把文本框输入
+ * （天凤记法如 `13m`）解析成牌数组。
+ *
+ * **它已经删除** —— 因为宝牌指示牌改成了牌面点选，没有文本输入了。
+ * 留着就是死代码（只有它自己的测试在调用）。
+ *
+ * 它同时也是「宝牌文本框打不进字」那个 bug 的载体，原因见上面的说明：
+ * 返回形状 `{ tiles, error }` 出错时把 tiles 补成 `[]`，
+ * 让调用方「丢掉 error」变得零成本 —— 多写一个 `const { tiles } = ` 就静默中招。
+ *
+ * 现在规则在 `dora-picker.ts`（纯函数 + 24 条测试），
+ * 而且点选根本产生不了「半合法输入」这种状态。
+ */

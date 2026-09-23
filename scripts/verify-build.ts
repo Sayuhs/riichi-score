@@ -21,9 +21,26 @@ const MIME: Record<string, string> = {
   ".md": "text/markdown; charset=utf-8",
 };
 
+/**
+ * 部署子路径 —— 必须与 vite.config.ts 的 base 一致。
+ *
+ * GitHub Pages 把仓库部署在 /<repo>/ 下，所以产物里的 assets 引用是
+ * `/richi-score/assets/...`。如果这里把 dist 挂在根路径，那些引用会 404，
+ * 后面所有「读 JS/CSS 内容」的检查会集体假失败 ——
+ * 看起来像功能坏了，其实只是服务器挂错了地方。
+ */
+const BASE_PATH = "/richi-score";
+
 const server = createServer(async (req, res) => {
   const urlPath = decodeURIComponent((req.url ?? "/").split("?")[0]);
-  const rel = urlPath === "/" ? "index.html" : urlPath.replace(/^\/+/, "");
+
+  // 只服务部署子路径下的请求（模拟 GitHub Pages 的前缀）
+  if (!urlPath.startsWith(BASE_PATH)) {
+    res.writeHead(404).end("not found (outside deploy path)");
+    return;
+  }
+  let rest = urlPath.slice(BASE_PATH.length).replace(/^\/+/, "");
+  const rel = rest === "" ? "index.html" : rest;
   const filePath = normalize(join(ROOT, rel));
   if (!filePath.startsWith(ROOT)) {
     res.writeHead(403).end("forbidden");
@@ -39,7 +56,25 @@ const server = createServer(async (req, res) => {
 });
 
 await new Promise<void>((r) => server.listen(PORT, "127.0.0.1", r));
-const base = `http://127.0.0.1:${PORT}`;
+const base = `http://127.0.0.1:${PORT}${BASE_PATH}`;
+
+/**
+ * 把 index.html 里的资源引用规范化成「相对部署根」的路径。
+ *
+ * ⚠️ 两种写法都要支持：
+ *   绝对：/richi-score/assets/x.js  →  /assets/x.js
+ *   相对：./assets/x.js             →  /assets/x.js
+ *
+ *    以前只处理了 `./`，因为那时 base 是相对的。用户把 base 改成绝对路径后
+ *    这里没跟着改，于是拼成 `/richi-score/richi-score/assets/...` → 404，
+ *    后面所有「读 JS/CSS 内容」的检查集体假失败 ——
+ *    看起来像功能全坏了，其实只是路径拼错了。
+ */
+function toDeployPath(ref: string): string {
+  if (ref.startsWith(BASE_PATH)) return ref.slice(BASE_PATH.length);
+  if (ref.startsWith("./")) return "/" + ref.slice(2);
+  return ref;
+}
 
 let pass = 0;
 let fail = 0;
@@ -75,7 +110,7 @@ const jsMatch = html.match(/src="([^"]+\.js)"/);
 const cssMatch = html.match(/href="([^"]+\.css)"/);
 
 if (jsMatch) {
-  const jsPath = jsMatch[1]!.replace(/^\.\//, "/");
+  const jsPath = toDeployPath(jsMatch[1]!);
   // 检查真正能证明「Vue 应用 + 牌面映射都被打进去了」的标志：
   //  - createApp：Vue 应用入口
   //  - tiles/：tile-images.ts 生成的路径前缀
@@ -90,7 +125,7 @@ if (jsMatch) {
 }
 
 if (cssMatch) {
-  const cssPath = cssMatch[1]!.replace(/^\.\//, "/");
+  const cssPath = toDeployPath(cssMatch[1]!);
   await check("主 CSS 可访问", cssPath, { minBytes: 500 });
 } else {
   fail++;
@@ -189,7 +224,7 @@ if (htmlBytes < 2 * 1024 * 1024) {
 // `@sacckey/mahjong` 只在测试里当「第二意见」用。如果它被打进产物，
 // 说明有人恢复了 score() 的 engine 选项，会让包白胖 6KB。
 if (jsMatch) {
-  const jsUrl = jsMatch[1]!.replace(/^\.\//, "/");
+  const jsUrl = toDeployPath(jsMatch[1]!);
   const js = await (await fetch(base + jsUrl)).text();
   const tests: [string, string, boolean][] = [
     // [说明, 标志字符串, 期望存在?]
@@ -214,7 +249,7 @@ if (jsMatch) {
 
 // --- 确认产物里没有残留的旧配色引用 ---
 if (jsMatch) {
-  const jsUrl = jsMatch[1]!.replace(/^\.\//, "/");
+  const jsUrl = toDeployPath(jsMatch[1]!);
   const js = await (await fetch(base + jsUrl)).text();
   for (const wrong of ["tiles/Black/", "tiles/Yellow/"]) {
     if (js.includes(wrong)) {
@@ -234,7 +269,7 @@ if (jsMatch) {
 // 检查构建产物的 JS 与 CSS（那才是真正交付给用户的东西）。
 console.log("\n【面向用户的文案】");
 if (jsMatch) {
-  const js = await (await fetch(base + (jsMatch[1]!.replace(/^\.\//, "/")))).text();
+  const js = await (await fetch(base + (toDeployPath(jsMatch[1]!)))).text();
   const banned: [string, string][] = [
     ["结算在 M3", "里程碑说法"],
     ["（M1", "里程碑编号"],
@@ -258,7 +293,7 @@ if (jsMatch) {
 // ============================================================
 console.log("\n【M3.1 打磨项的产物验证】");
 if (jsMatch) {
-  const js = await (await fetch(base + (jsMatch[1]!.replace(/^\.\//, "/")))).text();
+  const js = await (await fetch(base + (toDeployPath(jsMatch[1]!)))).text();
   // 失败提示的三个分支文案（在 JS 里）
   const jsChecks: [string, string][] = [
     ["无役提示", "这手牌没有役，不能和牌"],
@@ -278,7 +313,7 @@ if (jsMatch) {
 
 // 防抖动的占位类名在 CSS 里（scoped 样式会被打进 CSS 文件）
 if (cssMatch) {
-  const css = await (await fetch(base + (cssMatch[1]!.replace(/^\.\//, "/")))).text();
+  const css = await (await fetch(base + (toDeployPath(cssMatch[1]!)))).text();
   const cssChecks = ["slot-win", "slot-hand", "slot-notice", "notice-quiet"];
   for (const cls of cssChecks) {
     if (css.includes(cls)) {
@@ -339,10 +374,11 @@ if (cssMatch) {
 
     // JS 文案：副露添加按钮的独有字样
     const js = jsMatch
-      ? await (await fetch(base + (jsMatch[1]!.replace(/^\.\//, "/")))).text()
+      ? await (await fetch(base + (toDeployPath(jsMatch[1]!)))).text()
       : "";
+    // ⚠️ 不要检查「+ 添加」这个字符串 —— 宝牌点选器合法地复用了它。
+    //    要检查的是**只有副露 UI 才会有**的文案（那几个模板按钮）。
     const meldOnlyStrings: [string, string][] = [
-      ["添加副露按钮", "+ 添加"],
       ["吃模板按钮", "吃 123m"],
       ["碰模板按钮", "碰 111m"],
       ["杠模板按钮", "暗杠 1111m"],
@@ -394,7 +430,7 @@ if (cssMatch) {
   // ⚠️ scoped 样式会被编译成 `.frame[data-v-xxxx]{`，
   //    所以不能字面匹配 `.frame{` —— 改用不带花括号的类名。
   const tileChecks: [string, string][] = [
-    ["content-box 保护比例", "box-sizing:content-box"],
+    ["body 用 border-box（宽度即最终宽）", "box-sizing:border-box"],
     ["aspect-ratio 3/4", "aspect-ratio:3/4"],
     ["裁剪层 frame", ".frame"],
     ["图片绝对定位", "position:absolute"],
@@ -435,7 +471,7 @@ if (cssMatch) {
 // ============================================================
 console.log("\n【M3.3 移除项确认】");
 if (jsMatch) {
-  const js = await (await fetch(base + (jsMatch[1]!.replace(/^\.\//, "/")))).text();
+  const js = await (await fetch(base + (toDeployPath(jsMatch[1]!)))).text();
   // 文本输入 / 复制 / 撤销的 UI 文案不该再出现
   const removed: [string, string][] = [
     ["文本输入入口", "文本输入"],
@@ -460,7 +496,7 @@ if (jsMatch) {
 // ============================================================
 console.log("\n【役种速查弹窗】");
 if (jsMatch) {
-  const js = await (await fetch(base + (jsMatch[1]!.replace(/^\.\//, "/")))).text();
+  const js = await (await fetch(base + (toDeployPath(jsMatch[1]!)))).text();
   const guideChecks: [string, string][] = [
     ["弹窗标题", "役种速查"],
     ["「没役怎么办」标签", "没役怎么办"],

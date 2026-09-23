@@ -60,6 +60,12 @@ jobs:
       - name: 验收离线能力
         run: pnpm run verify:offline
 
+      # 布局预算检查：断言「牌有多高」和「槽有多高」是同一来源。
+      # 这次的「页面像被裁剪」「门前牌被裁」都是这两者错配导致的，
+      # 而它们都溜过了单元测试和 verify:build（后者只查类名存在与否）。
+      - name: 验收布局预算
+        run: pnpm run verify:layout
+
       - name: 配置 Pages
         uses: actions/configure-pages@v5
 

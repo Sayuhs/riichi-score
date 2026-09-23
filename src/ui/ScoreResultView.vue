@@ -13,6 +13,7 @@
 import { computed } from "vue";
 import type { ScoreResult } from "../score/types.ts";
 import { fuReasonLabel, limitLabel, seatLabel, tierLabel, yakuLabel } from "./labels.ts";
+import { buildPaymentRows, honbaNote } from "./result-view.ts";
 
 const props = defineProps<{
   result: ScoreResult;
@@ -34,25 +35,26 @@ const hanText = computed(() => {
   return `${props.result.han} 番`;
 });
 
-/** 本场 / 立直棒的存在性 */
-const hasHonba = computed(() => props.result.honbaPayments.length > 0);
+/** 立直棒的存在性 */
 const hasSticks = computed(() => props.result.riichiBonus > 0);
 
-/** 支付明细：合并「基础支付」与「本场」以便逐家展示 */
-const paymentRows = computed(() => {
-  const rows: { seat: string; base: number; honba: number; total: number }[] = [];
-  const seats = new Set<string>();
-  for (const p of props.result.basePayments) seats.add(p.seat);
-  for (const p of props.result.honbaPayments) seats.add(p.seat);
+/**
+ * 支付明细：逐家一行。
+ *
+ * 派生逻辑在 `result-view.ts`（纯函数、可测试）——
+ * 组件只做接线，因为 `.vue` 在本项目里测不到。
+ */
+const paymentRows = computed(() => buildPaymentRows(props.result));
 
-  for (const seat of ["east", "south", "west", "north"]) {
-    if (!seats.has(seat)) continue;
-    const base = props.result.basePayments.find((p) => p.seat === seat)?.value ?? 0;
-    const honba = props.result.honbaPayments.find((p) => p.seat === seat)?.value ?? 0;
-    rows.push({ seat, base, honba, total: base + honba });
-  }
-  return rows;
-});
+/**
+ * 本场提示文案。
+ *
+ * ⚠️ 这里曾经直接把 `result.honbaPayments` 插进模板。它的类型是 `Payment[]`，
+ *    Vue 插值对象数组会渲染成 `[object Object]` ——
+ *    有本场时用户看到的是「本场 [object Object] 已计入。」
+ *    现在文案由纯函数生成，测试会断言它不含占位符。
+ */
+const honbaText = computed(() => honbaNote(props.result));
 
 /** 支付方式说明 */
 const payNote = computed(() =>
@@ -117,7 +119,7 @@ const payNote = computed(() =>
       <span class="card-title" :title="payNote">支付明细</span>
       <div class="pay-table">
         <div v-for="row in paymentRows" :key="row.seat" class="pay-row">
-          <span class="pay-seat">{{ seatLabel(row.seat as never) }}</span>
+          <span class="pay-seat">{{ seatLabel(row.seat) }}</span>
           <span class="pay-detail">
             <template v-if="row.honba > 0">
               {{ row.base }} + {{ row.honba }}（本场）
@@ -140,8 +142,8 @@ const payNote = computed(() =>
         <strong>{{ result.total.toLocaleString() }} 点</strong>
       </div>
 
-      <p v-if="hasHonba || hasSticks" class="pay-note">
-        <template v-if="hasHonba">本场 {{ result.honbaPayments }} 已计入。</template>
+      <p v-if="honbaText || hasSticks" class="pay-note">
+        <template v-if="honbaText">{{ honbaText }}</template>
         本场与立直棒由本工具自行计算（引擎不含这两项）。
       </p>
     </section>
