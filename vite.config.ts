@@ -51,7 +51,7 @@ export default defineConfig({
     // 校准页是开发工具，不进生产产物
     excludeDevFiles(["tile-preview.html"]),
   ],
-  base: "./",
+  base: "/richi-score/",
   build: {
     outDir: "dist",
     // 40 张小 SVG 合计约 800KB，逐个内联会撑大 HTML；
@@ -62,4 +62,3 @@ export default defineConfig({
     chunkSizeWarningLimit: 1024,
   },
 });
-
