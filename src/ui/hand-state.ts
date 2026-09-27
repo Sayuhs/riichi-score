@@ -128,7 +128,11 @@ export function addTile(state: HandState, tile: string): HandState {
     }
     return {
       ...state,
-      notice: "牌已经录满了（14 张）。要换某张牌，先点掉它再点新的。",
+      // ⚠️ 不要把张数写死在这句话里。
+      //    以前写的是「牌已经录满了（14 张）」—— 但有杠时物理牌是 15/16/17/18 张，
+      //    用户看到「14」就会以为应用算错了，这正是他报「限制 14 张」困惑的来源。
+      //    界面统一按**物理张数**口径说话，具体数字交给顶栏的计数显示。
+      notice: "牌已经录满了。要换某张牌，先点掉它再点新的。",
       textErrors: [],
     };
   }
@@ -248,6 +252,159 @@ export function guessMeldKind(tiles: string[]): MeldKind {
 }
 
 /** 加入一组副露 */
+/**
+ * 一手牌的**物理张数** —— 实际摆在桌上的牌数。
+ *
+ * ## 为什么需要它（和「逻辑张数」的区别）
+ *
+ *   逻辑张数（引擎的契约）= 门前 + 副露组数×3 + 1     ← 每个杠只算 3 张
+ *   物理张数（用户看到的）  = 门前 + 副露实际张数 + 1  ← 杠算 4 张
+ *
+ * 两者在没有杠时都是 14；有 1 个杠时逻辑仍是 14、物理是 15。
+ *
+ * **界面只展示物理张数** —— 用户能数出来的就是这么多张牌。
+ * 「逻辑 14」是我们和引擎之间的内部约定，给用户看只会造成困惑
+ * （之前那句「牌已经录满了（14 张）」就是这么把用户绕进去的）。
+ */
+export function physicalTileCount(state: HandState): number {
+  const melded = state.melds.reduce((n, m) => n + m.tiles.length, 0);
+  return state.concealed.length + melded + (state.winningTile ? 1 : 0);
+}
+
+/**
+ * 一手完整手牌的**物理张数目标** = 14 + 杠数。
+ *
+ * 每多一个杠就多一张实体牌（杠是 4 张，但只占 3 格手牌位）。
+ * 这就是用户说的「动态调整」：标一个杠，目标从 14 变成 15。
+ */
+export function expectedPhysicalCount(melds: MeldedGroup[]): number {
+  const kans = melds.filter((m) => m.tiles.length === 4).length;
+  return 14 + kans;
+}
+
+/** 门前里哪张牌刚好凑满 4 张（用于自动追问「这 4 张是杠吗？」） */
+export function kanCandidate(state: HandState): string | null {
+  const norm = (t: string) => (t[0] === "0" ? `5${t[1]}` : t);
+  const counts = new Map<string, { n: number; sample: string }>();
+  for (const t of state.concealed) {
+    const k = norm(t);
+    const cur = counts.get(k) ?? { n: 0, sample: t };
+    cur.n += 1;
+    counts.set(k, cur);
+  }
+  for (const [, v] of counts) if (v.n === 4) return v.sample;
+  return null;
+}
+
+/**
+ * 把门前的 4 张同种牌提升为一组杠。
+ *
+ * ## 为什么必须由用户明确指定，而不能自动推断
+ *
+ * 「4 张同牌」不等于「杠」。实测过的反例：
+ *
+ *     1111m（杠）+ 2222m（**不是杠**）+ 345p + 99s
+ *
+ * 15 张实体牌，引擎正确地把 2222m 拆成 222m 刻子 + 234m 顺子里的那张。
+ * 如果看到 4 张就当成杠，这手牌会**多算一个杠**（番符全错）。
+ *
+ * 所以这里做成一个明确的动作，由 UI 在用户确认后才调用。
+ *
+ * @param kind 暗杠还是明杠 —— 符数不同（16/32 vs 8/16），
+ *             而且暗杠不破门清、算暗刻（影响三暗刻/四暗刻）。
+ */
+export function promoteToKan(
+  state: HandState,
+  tile: string,
+  kind: "ankan" | "daiminkan",
+): HandState {
+  const norm = (t: string) => (t[0] === "0" ? `5${t[1]}` : t);
+  const target = norm(tile);
+
+  // ⚠️ 和牌张不能属于杠。真实牌局里不可能 ——
+  //    杠的 4 张在和牌之前就都已经在手里了。
+  //    这里拒绝而不是「自动清掉和牌张」：那等于偷偷改动用户已录的东西，
+  //    会让他少一张牌却不明显。
+  if (state.winningTile && norm(state.winningTile) === target) {
+    return {
+      ...state,
+      notice:
+        "这 4 张里有 1 张是当前的「和牌张」。杠的 4 张在和牌前就都在手里，请先把和牌张改成别的牌。",
+      textErrors: [],
+    };
+  }
+
+  const four = state.concealed.filter((t) => norm(t) === target);
+  if (four.length !== 4) {
+    return {
+      ...state,
+      notice: `门前只有 ${four.length} 张 ${tile}，凑不满一组杠`,
+      textErrors: [],
+    };
+  }
+
+  // 把这 4 张从门前移走
+  const rest = [...state.concealed];
+  for (let i = 0; i < 4; i++) {
+    const idx = rest.findIndex((t) => norm(t) === target);
+    if (idx >= 0) rest.splice(idx, 1);
+  }
+
+  const meld: MeldedGroup = {
+    id: nextMeldId++,
+    kind,
+    tiles: sortTiles(four),
+  };
+
+  return {
+    ...state,
+    concealed: rest,
+    melds: [...state.melds, meld],
+    notice: null,
+    textErrors: [],
+  };
+}
+
+/**
+ * 校验一组副露的形态是否合法。返回 `null` 表示合法。
+ *
+ * ## 为什么要自己做（引擎也会校验）
+ *
+ * 引擎会吐 `A run was called from south, but ...` 这种英文，
+ * 而且不说是哪几张不对。自己校验能给出**中文的、具体的**提示。
+ *
+ * ## 规则
+ *
+ *   碰 / 明杠 → 必须是相同的牌
+ *   吃        → 必须同一花色、且连续（如 3-4-5）
+ *
+ * 赤 5 与普通 5 视为同种（`0m` 和 `5m` 是一张牌的两个形态）。
+ */
+export function checkMeldShape(kind: MeldKind, tiles: string[]): string | null {
+  if (tiles.length === 0) return "还没有选牌";
+  const norm = (t: string) => (t[0] === "0" ? `5${t[1]}` : t);
+  const ns = tiles.map(norm);
+
+  if (kind === "triplet" || kind === "daiminkan" || kind === "ankan") {
+    const want = kind === "triplet" ? 3 : 4;
+    if (tiles.length !== want) return `需要 ${want} 张`;
+    if (!ns.every((t) => t === ns[0])) {
+      return kind === "triplet" ? "碰需要 3 张相同的牌" : "杠需要 4 张相同的牌";
+    }
+    return null;
+  }
+
+  // 吃
+  if (tiles.length !== 3) return "吃需要 3 张";
+  const suit = ns[0]![1];
+  if (!ns.every((t) => t[1] === suit)) return "吃需要同一花色的三张牌";
+  const ranks = ns.map((t) => Number(t[0])).sort((a, b) => a - b);
+  if (ranks[1] !== ranks[0]! + 1 || ranks[2] !== ranks[1]! + 1) {
+    return "吃需要连续的三张（如 3-4-5）";
+  }
+  return null;
+}
+
 export function addMeld(state: HandState, tiles: string[]): HandState {
   if (tiles.length !== 3 && tiles.length !== 4) {
     return { ...state, notice: `一组副露必须是 3 或 4 张，收到 ${tiles.length} 张` };

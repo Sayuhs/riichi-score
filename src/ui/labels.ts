@@ -79,16 +79,33 @@ export function yakuLabel(name: string): string {
   return YAKU_ZH[name] ?? name;
 }
 
-/** 符的理由 → 中文 */
+/**
+ * 符的理由 → 中文。
+ *
+ * ⚠️ **键必须逐字等于引擎吐出的字符串**，不能自己改成驼峰。
+ *
+ *    这里曾经把两个键写成 `yakuhaiPair` / `doubleWindPair`，
+ *    而引擎的 FuReason 实际是**带空格**的 `"yakuhai pair"` / `"double wind pair"`
+ *    （见 riichi-score 的 parsing/parse-fu.d.ts）。
+ *    结果这两个符理由查不到中文，`fuReasonLabel` 回退成原字符串 ——
+ *    结算页的「符的明细」里就**直接显示英文**。
+ *
+ *    而「役牌雀头 2 符」是**极常见**的（任何白发中的雀头都会命中），
+ *    所以这个 bug 几乎每一手带三元牌雀头的牌都会出现。
+ *
+ *    现在这张表与引擎的 17 个 FuReason **一一对应**，
+ *    并且有测试直接从引擎的类型定义里读出来核对（多一个少一个都会红）。
+ *
+ *    （原先还有 5 个引擎从不输出的死键：closedRon / menzenRon /
+ *      kanchan / penchan / tanki —— 已删除。）
+ */
 const FU_REASON_ZH: Record<string, string> = {
   base: "底符",
   chiitoitsu: "七对子固定",
   tsumo: "自摸",
   "closed ron": "门清荣和",
-  closedRon: "门清荣和",
-  menzenRon: "门清荣和",
-  yakuhaiPair: "役牌雀头",
-  doubleWindPair: "连风雀头",
+  "yakuhai pair": "役牌雀头",
+  "double wind pair": "连风雀头",
   "open triplet of simples": "中张明刻",
   "closed triplet of simples": "中张暗刻",
   "open triplet of terminals/honors": "幺九明刻",
@@ -97,9 +114,6 @@ const FU_REASON_ZH: Record<string, string> = {
   "closed kan of simples": "中张暗杠",
   "open kan of terminals/honors": "幺九明杠",
   "closed kan of terminals/honors": "幺九暗杠",
-  kanchan: "嵌张听",
-  penchan: "边张听",
-  tanki: "单骑听",
   "kanchan wait": "嵌张听",
   "penchan wait": "边张听",
   "tanki wait": "单骑听",

@@ -31,6 +31,9 @@ import {
 } from "./ui/game-state.ts";
 import { buildHandInput } from "./ui/build-input.ts";
 import { ALL_TILE_KINDS } from "./ui/tile-images.ts";
+import { tileLabel } from "./ui/tiles.ts";
+import { diagnoseNoYaku, type ContextFix, type TileSwap } from "./ui/no-yaku-advice.ts";
+import { diagnoseInvalidHand } from "./ui/invalid-hand-advice.ts";
 import { score } from "./score/index.ts";
 import type { ScoreResult } from "./score/types.ts";
 
@@ -39,7 +42,30 @@ type Sheet =
   | { kind: "none" }
   | { kind: "guide" }
   | { kind: "result"; result: ScoreResult }
-  | { kind: "fail"; title: string; detail: string; tips: string[] };
+  | {
+      kind: "fail";
+      title: string;
+      detail: string;
+      tips: string[];
+      /** 无役时：改场况就能有役的方案（空数组 = 没有） */
+      fixes: ContextFix[];
+      /** 诊断结论（无役 / 牌形不成立都有） */
+      verdict: string;
+      /** 牌形不成立时：具体问题列表（凑出几组、剩哪几张、是否撞牌） */
+      problems: string[];
+      /** 无役时：换掉某张牌就有役（含参考役） */
+      tileSwaps: TileSwap[];
+      /** `context` = 场况问题；`shape` = 牌型真没役；空串 = 不适用 */
+      verdictKind: "context" | "shape" | "";
+      /**
+       * 显式控制「役种速查」按钮的显隐。
+       *
+       * ⚠️ 以前这里靠 `sheet.title.includes('没有役')` 来判断 ——
+       *    改一下标题文案，按钮就会**静默消失**。
+       *    所以改成显式字段。
+       */
+      showGuide: boolean;
+    };
 
 const sheet = ref<Sheet>({ kind: "none" });
 
@@ -56,7 +82,17 @@ const meldCount = computed(() => hand.value.melds.length);
 const isMenzen = computed(() =>
   hand.value.melds.every((m) => m.kind === "ankan"),
 );
-const handReady = computed(() => isComplete(hand.value));
+/** 预检判定「真的没役」—— 这时「下一步」要拦住，换牌是唯一出路 */
+const handBlocked = ref(false);
+
+/**
+ * 「下一步」能不能点。
+ *
+ * ⚠️ 只在预检判定 `hopeless`（试遍常见场况都没役）时才拦。
+ *    「当前场况没役、但勾立直就有」**不能拦** —— 拦了用户就永远
+ *    进不去场况页、永远勾不上立直，那手牌直接卡死。
+ */
+const handReady = computed(() => isComplete(hand.value) && !handBlocked.value);
 
 const issues = computed(() =>
   validateGameState(game.value, {
@@ -105,16 +141,89 @@ async function doScore() {
     const r = await score(built.input);
     if ("error" in r) {
       console.error("[算番失败]", r.error.kind, r.error.message);
-      sheet.value = { kind: "fail", ...humanizeError(r.error.kind) };
+      sheet.value = await buildFailSheet(r.error.kind);
       return;
     }
     sheet.value = { kind: "result", result: r };
   } catch (e) {
     console.error("[算番异常]", e);
-    sheet.value = { kind: "fail", ...humanizeError("engine-error") };
+    sheet.value = await buildFailSheet("engine-error");
   } finally {
     busy.value = false;
   }
+}
+
+/**
+ * 构造「算番失败」弹窗的数据。
+ *
+ * 无役时额外跑一次针对性诊断 —— 问的是「改哪个场况就有役」，
+ * 因为现实中无役绝大多数是场况没设对（门清忘了勾立直、其实是自摸），
+ * 而不是牌型真的没役。
+ *
+ * ⚠️ 诊断失败**不该挡住错误提示** —— 出异常就退化成原来的通用 tips。
+ */
+async function buildFailSheet(kind: string): Promise<Extract<Sheet, { kind: "fail" }>> {
+  const base = humanizeError(kind);
+  const isNoYaku = kind === "no-yaku";
+
+  let fixes: ContextFix[] = [];
+  let tileSwaps: TileSwap[] = [];
+  let problems: string[] = [];
+  let verdict = "";
+  let verdictKind: "context" | "shape" | "" = "";
+
+  if (isNoYaku) {
+    try {
+      const d = await diagnoseNoYaku(hand.value, game.value, {
+        isMenzen: isMenzen.value,
+      });
+      fixes = d.contextFixes;
+      tileSwaps = d.tileSwaps;
+      verdict = d.verdict;
+      verdictKind = d.verdictKind;
+    } catch (e) {
+      console.error("[无役诊断失败]", e);
+    }
+  }
+
+  // 牌形不成立：引擎只吐一句英文，用户看完还是不知道改什么。
+  // 这里给出确定性的具体问题（换哪张 / 是不是撞了宝牌 / 凑出几组）。
+  if (kind === "invalid-hand") {
+    try {
+      const d = await diagnoseInvalidHand(hand.value, game.value);
+      verdict = d.verdict;
+      problems = d.problems;
+      if (d.winningFix) {
+        // 换和牌张就能成立 —— 归到 fixes 里，复用同一套「怎么改」的样式
+        fixes = [
+          {
+            text: `把「和牌张」从 ${tileLabel(d.winningFix.from)} 改成 ${tileLabel(
+              d.winningFix.to,
+            )}`,
+            patch: {}, // 牌形问题不是改场况能解决的，所以不给 patch
+            yaku: [],
+            confidence: "likely",
+          },
+        ];
+        verdictKind = "shape";
+      } else {
+        verdictKind = "shape";
+      }
+    } catch (e) {
+      console.error("[牌形诊断失败]", e);
+    }
+  }
+
+  return {
+    kind: "fail",
+    ...base,
+    fixes,
+    tileSwaps,
+    problems,
+    verdict,
+    verdictKind,
+    showGuide: isNoYaku,
+  };
 }
 
 /**
@@ -200,8 +309,10 @@ function editGame() {
       <div class="page">
         <HandInput
           v-model="hand"
+          :game="game"
           :class="{ hidden: showSettings }"
           @open-guide="sheet = { kind: 'guide' }"
+          @precheck="handBlocked = $event"
         />
 
         <!-- 场况：录完牌后展开 -->
@@ -297,11 +408,55 @@ function editGame() {
           <section class="fail-card">
             <h2 class="fail-title">{{ sheet.title }}</h2>
             <p class="fail-detail">{{ sheet.detail }}</p>
-            <ul class="fail-tips">
+
+            <!--
+              无役时给**针对这一手牌**的诊断，而不是通用 tips：
+                · verdict  —— 一句话结论（是场况问题还是牌型问题）
+                · fixes    —— 改哪个场况就有役（附上会成立哪些役）
+              非无役的错因（手牌不成立 / 场况矛盾）仍然显示通用 tips。
+            -->
+            <template v-if="sheet.verdict">
+              <p
+                class="fail-verdict"
+                :class="{ shape: sheet.verdictKind === 'shape' }"
+              >
+                {{ sheet.verdict }}
+              </p>
+
+              <!-- 牌形不成立时的具体问题（凑出几组 / 剩哪几张 / 是不是撞了宝牌） -->
+              <ul v-if="sheet.problems.length" class="fail-problems">
+                <li v-for="(p, i) in sheet.problems" :key="i">{{ p }}</li>
+              </ul>
+
+              <!-- 换掉某张牌就有役（含参考役）。
+                   和无役诊断的「勾个立直」是两类不同的建议，都展示。 -->
+              <ul v-if="sheet.tileSwaps.length" class="fail-swaps">
+                <li v-for="(s, i) in sheet.tileSwaps" :key="i" class="fail-swap">
+                  <span class="swap-main">
+                    把 {{ s.isWinning ? "和牌张" : "" }}{{ tileLabel(s.from) }} 换成
+                    <strong>{{ tileLabel(s.to) }}</strong>
+                  </span>
+                  <span class="swap-yaku">→ {{ s.yaku.join("、") }} {{ s.han }} 番</span>
+                </li>
+              </ul>
+
+              <ul v-if="sheet.fixes.length" class="fail-fixes">
+                <li v-for="(f, i) in sheet.fixes" :key="i" class="fail-fix">
+                  <span class="fix-text">{{ f.text }}</span>
+                  <span class="fix-yaku">→ {{ f.yaku.join("、") }}</span>
+                  <span v-if="f.confidence === 'maybe'" class="fix-maybe">（待确认）</span>
+                </li>
+              </ul>
+            </template>
+
+            <ul v-else class="fail-tips">
               <li v-for="(t, i) in sheet.tips" :key="i">{{ t }}</li>
             </ul>
+
+            <!-- ⚠️ 用显式字段控制显隐，不再靠 title 字符串匹配 ——
+                 那样改一下标题文案按钮就会静默消失 -->
             <button
-              v-if="sheet.title.includes('没有役')"
+              v-if="sheet.showGuide"
               type="button"
               class="btn btn-yellow guide-btn"
               @click="sheet = { kind: 'guide' }"
@@ -520,6 +675,111 @@ function editGame() {
   font-size: 12px;
   line-height: 1.45;
   opacity: 0.8;
+}
+
+/* 无役诊断的一句话结论 */
+.fail-verdict {
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.5;
+  padding: 7px 9px;
+  background: var(--pop-yellow);
+  border: 1.5px solid var(--ink);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-hard-sm);
+}
+/* 牌型真没役时换个颜色，和「场况问题」区分开 */
+.fail-verdict.shape {
+  background: var(--pop-cyan);
+}
+
+/* 改场况就能有役的方案列表 */
+/* 换牌建议：左边「把 X 换成 Y」，右边参考役 */
+.fail-swaps {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.fail-swap {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 8px;
+  background: #fff;
+  border: 1.5px solid var(--ink);
+  border-left-width: 6px;
+  border-left-color: var(--pop-yellow);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+}
+.swap-main {
+  min-width: 0;
+}
+.swap-yaku {
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: 800;
+  opacity: 0.75;
+  white-space: nowrap;
+}
+
+/* 牌形不成立时的具体问题列表 */
+.fail-problems {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+.fail-problems li::marker {
+  color: var(--pop-pink);
+  font-weight: 900;
+}
+
+.fail-fixes {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.fail-fix {
+  padding: 6px 8px;
+  background: #fff;
+  border: 1.5px solid var(--ink);
+  border-left-width: 6px;
+  border-left-color: var(--pop-green);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.fix-text {
+  display: block;
+  font-weight: 700;
+}
+
+.fix-yaku {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  font-weight: 800;
+  opacity: 0.75;
+}
+
+.fix-maybe {
+  font-size: 10px;
+  font-weight: 700;
+  opacity: 0.6;
 }
 
 .fail-tips {

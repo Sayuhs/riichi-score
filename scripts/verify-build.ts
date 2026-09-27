@@ -336,68 +336,50 @@ if (cssMatch) {
   }
 
   // ============================================================
-  // 副露模块已按用户要求移除（强调三次）—— 防回退
+  // 副露（吃/碰/杠）录入 UI —— **必须在**
   // ============================================================
-  // ⚠️ 这里只检查**副露的交互 UI**，不检查中文词。原因：
-  //   「副露」「加杠」「顺子」「刻子」这些词在**役种说明**里都要用
-  //   （比如抢杠的定义、「副露后不成立」的提示、三色同顺的判据），
-  //   按字面一刀切会误报。
   //
-  //   所以改查**结构性的东西**：副露添加模式的 CSS 类名与按钮。
-  //   这些只属于副露 UI，不会出现在别处。
-  console.log("\n【副露模块移除确认】");
+  // 历史：这块 UI 曾经被移除（用户当时说不需要）。后来发现它不能没有 ——
+  // 「这 3 张是自己摸的还是吃来的」是两个完全不同的概念：
+  //     自己摸的 → 门清，立直/平和都成立
+  //     吃来的   → 破门清，这些役全没了
+  // 实测：同一副牌，差别是「2 番 2000 点」和「无役不能和」——
+  // 也就是说没有这块 UI，吃了牌再录会得到完全错误的点数。
+  //
+  // 所以现在是正向检查：确认它**存在**，别哪天被误删。
+  console.log("\n【副露录入 UI 必须在】");
   {
-    // CSS 类：副露添加模式专用
-    const meldCssClasses = ["meld-add", "meld-picked", "meld-actions", "meld-templates", "add-meld"];
-    for (const cls of meldCssClasses) {
+    const meldCss = ["card-meld", "slot-meld", "meld-add-btn", "meld-kind", "meld-x"];
+    for (const cls of meldCss) {
       if (cssMin.includes(cls)) {
-        fail++;
-        console.log(`  FAIL  ${("副露 UI 类名应已移除：" + cls).padEnd(38)} 仍存在`);
-      } else {
         pass++;
-        console.log(`  PASS  ${("已移除副露 UI 类：" + cls).padEnd(38)} 确认不在`);
+        console.log(`  PASS  ${("副露样式 " + cls).padEnd(38)} 存在`);
+      } else {
+        fail++;
+        console.log(`  FAIL  ${("副露样式 " + cls).padEnd(38)} 缺失 —— 吃/碰录不了会算错点数`);
       }
     }
 
-    // JS 文案：副露添加按钮的独有字样
     const js = jsMatch
       ? await (await fetch(base + (toDeployPath(jsMatch[1]!)))).text()
       : "";
-    // ⚠️ 不要检查「+ 添加」这个字符串 —— 宝牌点选器合法地复用了它。
-    //    要检查的是**只有副露 UI 才会有**的文案（那几个模板按钮）。
-    const meldOnlyStrings: [string, string][] = [
-      ["吃模板按钮", "吃 123m"],
-      ["碰模板按钮", "碰 111m"],
-      ["杠模板按钮", "暗杠 1111m"],
-      ["点击选副露的提示", "点下面的牌来选副露"],
+    const meldStrings: [string, string][] = [
+      ["吃按钮", "吃"],
+      ["碰按钮", "碰"],
+      ["明杠按钮", "明杠"],
+      ["门清淡文案", "门清（没有吃碰杠）"],
+      ["吃形态校验", "吃需要连续的三张"],
     ];
-    for (const [label, needle] of meldOnlyStrings) {
-      if (js.includes(needle)) {
-        fail++;
-        console.log(`  FAIL  ${("副露 UI 应已移除：" + label).padEnd(38)} 仍存在`);
-      } else {
-        pass++;
-        console.log(`  PASS  ${("已移除副露 UI：" + label).padEnd(38)} 确认不在`);
-      }
-    }
-
-    // 反向确认：逻辑层必须还在（避免误删）
-    const mustKeep: [string, string][] = [
-      ["门清判定", "门清"],
-      ["副露后不成立的提示", "副露后不成立"],
-      ["抢杠的役种说明", "别人加杠时"],
-    ];
-    for (const [label, needle] of mustKeep) {
+    for (const [label, needle] of meldStrings) {
       if (js.includes(needle)) {
         pass++;
-        console.log(`  PASS  ${("保留：" + label).padEnd(38)} 存在`);
+        console.log(`  PASS  ${("副露 UI：" + label).padEnd(38)} 存在`);
       } else {
         fail++;
-        console.log(`  FAIL  ${("逻辑丢失：" + label).padEnd(38)} 缺失`);
+        console.log(`  FAIL  ${("副露 UI：" + label).padEnd(38)} 缺失`);
       }
     }
   }
-
   // ============================================================
   // 牌面：三层结构 + 数学精确居中
   // ============================================================

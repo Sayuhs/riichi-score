@@ -12,3 +12,10 @@ declare const process: {
   argv: string[];
   env: Record<string, string | undefined>;
 };
+
+declare module "node:fs" {
+  /** 读文本文件。项目里只用于「读引擎的类型定义来核对覆盖」这类事。 */
+  export function readFileSync(path: string, encoding: "utf8"): string;
+  export function existsSync(path: string): boolean;
+  export function readdirSync(path: string): string[];
+}

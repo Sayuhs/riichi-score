@@ -19,6 +19,7 @@
  *   4 番 30 符 = 30 × 64 = 1920  → 不满贯
  *   4 番 40 符 = 40 × 64 = 2560  → 超过上限，满贯
  */
+import { readFileSync } from "node:fs";
 import {
   fuReasonLabel,
   limitLabel,
@@ -161,6 +162,62 @@ test("limitLabel 未知 limit 要回退，不能是 undefined", () => {
 test("limitLabel 接受 undefined（未达满贯时）", () => {
   const label = limitLabel(undefined);
   ok(typeof label === "string", "应是字符串");
+});
+
+// ============================================================
+console.log("\n【5】符理由的中文覆盖（直接对着引擎的类型定义核）");
+// ============================================================
+//
+// ⚠️ 这一组是**回归测试**，防的是这个真实 bug：
+//    FU_REASON_ZH 曾经把键写成驼峰 `yakuhaiPair` / `doubleWindPair`,
+//    而引擎的 FuReason 是**带空格**的 `"yakuhai pair"` / `"double wind pair"`。
+//    查不到就回退成原字符串 → 结算页的「符的明细」里直接显示英文。
+//    而「役牌雀头」极常见，所以几乎每手带三元牌雀头的牌都会中招。
+//
+//    这里不写死那份 17 个字符串的清单，而是**从引擎的类型定义里读出来** ——
+//    引擎哪天加了新的符理由，这个测试会立刻变红。
+
+/** 从引擎的 .d.ts 里抽出 FuReason 联合类型的所有成员 */
+function readEngineFuReasons(): string[] {
+  const dts = readFileSync(
+    "node_modules/riichi-score/dist/esm/parsing/parse-fu.d.ts",
+    "utf8",
+  );
+  const m = dts.match(/FuReason\s*=\s*([^;]+);/);
+  if (!m) throw new Error("没从引擎类型定义里找到 FuReason");
+  return [...m[1]!.matchAll(/"([^"]+)"/g)].map((x) => x[1]!);
+}
+
+test("能从引擎类型定义里读出 FuReason 清单", () => {
+  const reasons = readEngineFuReasons();
+  ok(reasons.length >= 17, `只读到 ${reasons.length} 个，应该至少 17 个`);
+  ok(reasons.includes("yakuhai pair"), "清单里应该有带空格的 \"yakuhai pair\"");
+});
+
+test("引擎会吐的每一个符理由都有中文（不会漏英文）", () => {
+  const reasons = readEngineFuReasons();
+  const missing: string[] = [];
+  const stillEnglish: string[] = [];
+  for (const r of reasons) {
+    const label = fuReasonLabel(r);
+    if (label === r) missing.push(r);
+    // 中文至少有一个汉字；纯英文说明没映射上
+    else if (!/[\u4e00-\u9fa5]/.test(label)) stillEnglish.push(`${r} -> ${label}`);
+  }
+  ok(missing.length === 0, `这些符理由没有中文映射: ${missing.join(", ")}`);
+  ok(stillEnglish.length === 0, `这些映射结果不含中文: ${stillEnglish.join(", ")}`);
+  console.log(`        （核对 ${reasons.length} 个符理由，全部有中文）`);
+});
+
+test("两个曾经写错的键确实修好了", () => {
+  eq(fuReasonLabel("yakuhai pair"), "役牌雀头", "役牌雀头");
+  eq(fuReasonLabel("double wind pair"), "连风雀头", "连风雀头");
+});
+
+test("旧的驼峰键已经不再被使用（删干净了）", () => {
+  // 这两个键若还在表里，说明没清干净；查不到会回退 —— 至少不该是中文
+  ok(fuReasonLabel("yakuhaiPair") === "yakuhaiPair", "驼峰键不该再有映射");
+  ok(fuReasonLabel("doubleWindPair") === "doubleWindPair", "驼峰键不该再有映射");
 });
 
 // ============================================================

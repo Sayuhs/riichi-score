@@ -243,8 +243,18 @@ const isRed = computed(() => props.tile[0] === "0");
 .clickable {
   cursor: pointer;
 }
+
+/* 按下时模拟「真的被按进去」：
+   牌往右下位移 2px，同时硬阴影归零 ——
+   看起来就是牌被压平贴到纸上了（波普贴纸的经典手感）。
+   ⚠️ 这条规则曾经被误删过（只剩 transition、没有 :active 本体），
+      结果按下去毫无反馈。改这里时注意别把它删掉。 */
 .clickable .body {
   transition: transform 0.06s ease, box-shadow 0.06s ease;
+}
+.clickable:active .body {
+  transform: translate(2px, 2px);
+  box-shadow: 0 0 0 var(--ink);
 }
 .tile:disabled {
   cursor: default;

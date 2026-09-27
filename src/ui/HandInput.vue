@@ -24,8 +24,24 @@
 import { computed, onMounted, ref, watch } from "vue";
 import TileImage from "./TileImage.vue";
 import { PICKER_ROWS } from "./tile-images.ts";
+import type { GameState } from "./game-state.ts";
+import { buildHandInput } from "./build-input.ts";
+import { score } from "../score/index.ts";
+import { formatSandboxResult } from "./sandbox-result.ts";
+import { precheckHand, type PrecheckResult } from "./hand-precheck.ts";
+import { tileLabel } from "./tiles.ts";
+import type { ScoreError, ScoreResult } from "../score/types.ts";
 import {
   addTile,
+  expectedPhysicalCount,
+  kanCandidate,
+  physicalTileCount,
+  promoteToKan,
+  addMeld,
+  checkMeldShape,
+  removeMeld,
+  setMeldKind,
+  type MeldKind,
   clearAll,
   clearWinningTile,
   countKind,
@@ -43,6 +59,13 @@ const props = withDefaults(
   defineProps<{
     /** 外部持有的手牌状态（由 App 统一管理） */
     modelValue?: HandState;
+    /**
+     * 当前场况 —— 试算模式要用它算番。
+     *
+     * 试算沙盒（Q11a）就是「拿当前场况 + 随便改的牌，实时看结果」，
+     * 所以它需要一个场况来源。没传就不显示试算开关。
+     */
+    game?: GameState;
   }>(),
   {},
 );
@@ -51,6 +74,14 @@ const emit = defineEmits<{
   (e: "update:modelValue", value: HandState): void;
   /** 请求打开役种速查弹窗 */
   (e: "openGuide"): void;
+  /**
+   * 预检结果上报给 App —— 它要据此决定「下一步」按钮能不能点。
+   *
+   * ⚠️ 只有 `hopeless`（试遍常见场况都没役）才该拦。
+   *    「当前场况没役但勾立直就有」**不能拦** —— 拦了用户就永远
+   *    进不去场况页，也就永远勾不上立直，那手牌直接卡死。
+   */
+  (e: "precheck", block: boolean): void;
 }>();
 
 const state = ref<HandState>(props.modelValue ?? createEmptyHand());
@@ -119,6 +150,8 @@ function removeWinning() {
 }
 function reset() {
   state.value = clearAll();
+  // 全清 = 从头开始，之前「这不是杠」的判断也一并忘掉
+  declinedKan.value = new Set();
 }
 
 // ---------------------------------------------------------------- 派生
@@ -131,20 +164,270 @@ const awaitingWinning = computed(
   () => !hasWinning.value && state.value.concealed.length >= expected.value,
 );
 
+// ---- 物理张数（界面只展示这个口径）----
+//
+// 逻辑张数（引擎的 14）会把每个杠折算成 3 张，只用于传给引擎。
+// 用户能数出来的牌是物理张数：没有杠时 14，1 个杠时 15，以此类推。
+/** 门清 = 没有副露，或只有暗杠（暗杠不破门清） */
+const isMenzenHand = computed(() => state.value.melds.every((m) => m.kind === "ankan"));
+
+const physical = computed(() => physicalTileCount(state.value));
+const physicalTarget = computed(() => expectedPhysicalCount(state.value.melds));
+
+// ---- 自动追问「这 4 张是杠吗？」----
+//
+// ⚠️ 为什么必须问，而不能自动推断：
+//    「4 张同牌」不等于「杠」。实测反例 ——
+//      1111m(杠) + 2222m(不是杠) + 345p + 99s（15 张实体牌）
+//    引擎正确地把 2222m 拆成 222m 刻子 + 234m 顺子。
+//    看到 4 张就当成杠，这手牌会多算一个杠，番符全错。
+
+/** 用户点过「不是」的牌种。组件本地状态 —— 纯交互记忆，不进领域模型 */
+const declinedKan = ref<Set<string>>(new Set());
+
+const normKind = (t: string) => (t[0] === "0" ? `5${t[1]}` : t);
+
+/** 门前凑满 4 张、且用户还没说「不是」的牌（有的话就显示追问） */
+const pendingKan = computed(() => {
+  const c = kanCandidate(state.value);
+  if (!c) return null;
+  return declinedKan.value.has(normKind(c)) ? null : c;
+});
+
+// 门前掉回 4 张以下时，清掉「不是」的记忆 —— 下次再凑满要重新问。
+// 否则用户删一张又加回来，就再也不会被追问了。
+watch(
+  () => kanCandidate(state.value),
+  (c) => {
+    if (!c && declinedKan.value.size) declinedKan.value = new Set();
+  },
+);
+
+function markKan(tile: string, kind: "ankan" | "daiminkan") {
+  state.value = promoteToKan(state.value, tile, kind);
+  declinedKan.value = new Set();
+}
+
+/**
+ * 「不是」：这 4 张不是杠，**保留它们**，只是不再追问。
+ *
+ * ⚠️ 这个选项是必需的，不能省 —— 4 张同牌**不等于**杠。
+ *    反例：222m 刻子 + 234m 顺子里那张 2m，一共 4 张 2m，
+ *    但只有一个刻子，没有杠。
+ *    如果「不是」把这 4 张清掉，这种牌就录不进去了。
+ */
+function declineKan(tile: string) {
+  const next = new Set(declinedKan.value);
+  next.add(normKind(tile));
+  declinedKan.value = next;
+}
+
 /**
  * 提示条文本 —— **永远返回非空字符串**。
  * 用 v-if 控制显隐会让提示条高度变化推动下方牌表，那正是抖动的来源。
+ *
+ * 「还需录入 N 张」用的是**物理**口径，和顶栏的计数保持一致 ——
+ * 否则顶栏说 13/15、提示说「还要 1 张」，用户会算不明白。
  */
 const noticeText = computed(() => {
   if (state.value.notice) return state.value.notice;
+  // 预检的警告优先于「已凑齐」—— 凑齐了但没役，说「已凑齐」是误导
+  if (precheck.value.kind === "hopeless" || precheck.value.kind === "context-hint") {
+    return precheck.value.text;
+  }
   if (complete.value) return "已凑齐，去下面设置场况后算番";
   if (awaitingWinning.value) return "门前已满，再点的那张会成为和牌张";
-  if (remaining.value > 0) return `还需录入 ${remaining.value} 张`;
+  const left = physicalTarget.value - physical.value;
+  if (left > 0) return `还需录入 ${left} 张`;
   return "";
+});
+
+// ---------------------------------------------------------------- 副露（吃 / 碰 / 杠）
+//
+// ## 为什么必须有这块
+//
+// 「这 3 张是自己摸的还是吃来的」是**两个完全不同的概念**，而且影响极大：
+// 吃了就破门清 → 立直不能立、平和/一盃口/七对子全不成立。
+//
+// 实测过的极端例子（牌**完全一样**，只差 234p 是摸的还是吃的）：
+//    自己摸的 → 2 番 30 符 → 2000 点（立直 + 平和）
+//    吃来的   → 无役，根本不能和牌
+//
+// ## 为什么不能像杠那样自动追问
+//
+// 杠能问，是因为「4 张同牌」罕见。但**每组面子都是 3 张牌** ——
+// 每一组顺子都可能是吃来的，自动问就是每手牌问 4 次。必须由用户指定。
+
+/** 正在添加哪种副露（null = 没在添加） */
+const meldMode = ref<null | "run" | "triplet" | "daiminkan">(null);
+/** 正在选的牌 */
+const meldPick = ref<string[]>([]);
+/** 形态不对时的提示 */
+const meldNotice = ref<string | null>(null);
+
+const MELD_LABEL: Record<string, string> = {
+  run: "吃",
+  triplet: "碰",
+  ankan: "暗杠",
+  daiminkan: "明杠",
+  shouminkan: "加杠",
+};
+
+const meldNeed = computed(() => (meldMode.value === "daiminkan" ? 4 : 3));
+
+function startMeld(kind: "run" | "triplet" | "daiminkan") {
+  meldMode.value = kind;
+  meldPick.value = [];
+  meldNotice.value = null;
+}
+
+/**
+ * 点右侧按钮：切换选中状态。
+ *
+ * **同时只能选一个** —— 再点另一个会直接换过去；
+ * 再点当前选中的那个则取消。
+ */
+function toggleMeld(kind: "run" | "triplet" | "daiminkan") {
+  if (meldMode.value === kind) {
+    cancelMeld();
+    return;
+  }
+  startMeld(kind);
+}
+
+function cancelMeld() {
+  meldMode.value = null;
+  meldPick.value = [];
+  meldNotice.value = null;
+}
+
+const normTile = (t: string) => (t[0] === "0" ? `5${t[1]}` : t);
+
+
+
+/** 点牌表里的某张牌来选副露 */
+function pickMeldTile(tile: string) {
+  if (meldPick.value.length >= meldNeed.value) return;
+  meldNotice.value = null;
+  const next = [...meldPick.value, tile];
+  meldPick.value = next;
+  if (next.length === meldNeed.value) confirmMeld();
+}
+
+function confirmMeld() {
+  const kind = meldMode.value;
+  if (!kind) return;
+  const tiles = meldPick.value;
+
+  const err = checkMeldShape(kind as MeldKind, tiles);
+  if (err) {
+    meldNotice.value = err;
+    meldPick.value = [];
+    return;
+  }
+
+  state.value = addMeld(state.value, tiles);
+  // addMeld 会按形态猜类型（4 张猜成暗杠），这里用用户选的那一种覆盖
+  const last = state.value.melds[state.value.melds.length - 1];
+  if (last) state.value = setMeldKind(state.value, last.id, kind as MeldKind);
+
+  cancelMeld();
+}
+
+function deleteMeld(id: number) {
+  state.value = removeMeld(state.value, id);
+  meldNotice.value = null;
+}
+
+// ---------------------------------------------------------------- 试算沙盒
+//
+// 打开后每改一次牌就重算一次，结果直接显示在底部 ——
+// 不用走「下一步 → 设场况 → 算番」。
+//
+// 价值在于「试」：改一张立刻看到有没有役、变多少点。
+// 正式流程做不到（要来回切页面）。
+
+// ---------------------------------------------------------------- 预检
+//
+// 录满 14 张时算一遍：当前场况有没有役？没有的话，勾个立直/自摸有没有？
+// 试遍都没有 → 这手牌真的没役，拦住「下一步」，并给换牌建议。
+const precheck = ref<PrecheckResult>({ kind: "idle", text: "", swaps: [] });
+
+watch(
+  [state, () => props.game],
+  async () => {
+    if (!props.game) return;
+    // 只在录完时才跑 —— 没录完时预检没有意义，也不该浪费算力
+    if (!isComplete(state.value)) {
+      precheck.value = { kind: "idle", text: "", swaps: [] };
+      emit("precheck", false);
+      return;
+    }
+    try {
+      const r = await precheckHand(state.value, props.game, {
+        isMenzen: isMenzenHand.value,
+      });
+      precheck.value = r;
+      emit("precheck", r.kind === "hopeless");
+    } catch (e) {
+      console.error("[预检失败]", e);
+      precheck.value = { kind: "ok", text: "", swaps: [] };
+      emit("precheck", false); // 预检出问题不该拦住用户
+    }
+  },
+  { deep: true, immediate: true },
+);
+
+const trial = ref(false);
+const trialResult = ref<ScoreResult | null>(null);
+const trialError = ref<ScoreError | null>(null);
+
+watch(
+  [state, () => props.game],
+  async () => {
+    if (!trial.value || !props.game) return;
+    const built = buildHandInput(state.value, props.game);
+    if (!built.ok) {
+      // 还没录完 —— 不算，也不显示错误（那是正常的中间状态）
+      trialResult.value = null;
+      trialError.value = null;
+      return;
+    }
+    try {
+      const r = await score(built.input);
+      if ("error" in r) {
+        trialError.value = r.error;
+        trialResult.value = null;
+      } else {
+        trialResult.value = r;
+        trialError.value = null;
+      }
+    } catch (e) {
+      console.error("[试算失败]", e);
+      trialResult.value = null;
+      trialError.value = null;
+    }
+  },
+  { deep: true, immediate: true },
+);
+
+/** 沙盒那一行要显示的文字（永远非空，保证固定高度不抖） */
+const sandbox = computed(() => {
+  // 没役时优先显示换牌建议 —— 它比试算结果更该看（而且复用同一个固定高度的槽）
+  if (precheck.value.kind === "hopeless" && precheck.value.swaps.length) {
+    const s = precheck.value.swaps[0]!;
+    return {
+      text: `试：把 ${tileLabel(s.from)} 换成 ${tileLabel(s.to)} → ${s.yaku.join("、")} ${s.han} 番`,
+      tone: "bad" as const,
+    };
+  }
+  return formatSandboxResult(trialResult.value, trialError.value, isComplete(state.value));
 });
 
 const noticeClass = computed(() => {
   if (state.value.notice) return "notice-warn";
+  if (precheck.value.kind === "hopeless") return "notice-warn";
+  if (precheck.value.kind === "context-hint") return "notice-ok";
   if (complete.value) return "notice-ok";
   return "notice-quiet";
 });
@@ -155,7 +438,10 @@ const noticeClass = computed(() => {
     <!-- ============ 顶栏 ============ -->
     <header class="bar">
       <div class="progress">
-        <span class="count">{{ state.concealed.length }}<i>/{{ expected }}</i></span>
+        <!-- ⚠️ 只展示**物理张数**（用户能数出来的牌）。
+             逻辑张数（引擎的 14，把每个杠折算成 3 张）不显示 ——
+             给用户看只会造成困惑，之前那句「录满了（14 张）」就是这么把他绕进去的。 -->
+        <span class="count">{{ physical }}<i>/{{ physicalTarget }}</i></span>
         <span v-if="complete" class="tag tag-ok">凑齐了</span>
         <span v-else-if="awaitingWinning" class="tag tag-pink">点最后一张</span>
       </div>
@@ -200,6 +486,74 @@ const noticeClass = computed(() => {
       </section>
     </div>
 
+    <!-- ============ 副露（吃 / 碰 / 杠）============ -->
+    <!--
+      「这 3 张是自己摸的还是吃来的」是两回事，影响极大：
+        自己摸的 → 门清，立直/平和都成立
+        吃来的   → 破门清，这些役全没了
+      所以必须能标注。用不到时它就是一行「门清（没有吃碰杠）」。
+    -->
+    <section class="card card-meld slot-meld">
+      <div class="meld-main">
+        <span class="card-title">副露</span>
+
+      <div class="slot-body meld-body">
+        <div v-if="state.melds.length" class="melds">
+          <div v-for="m in state.melds" :key="m.id" class="meld">
+            <span class="meld-tiles">
+              <TileImage v-for="(t, i) in m.tiles" :key="i" :tile="t" size="sm" />
+            </span>
+            <span class="meld-kind">{{ MELD_LABEL[m.kind] }}</span>
+            <button type="button" class="meld-x" title="删掉这组" @click="deleteMeld(m.id)">
+              ✕
+            </button>
+          </div>
+        </div>
+        <div v-else-if="meldMode" class="meld-picking">
+          <span class="meld-picked">
+            <TileImage v-for="(t, i) in meldPick" :key="i" :tile="t" size="sm" />
+          </span>
+          <span class="hint">在下面点 {{ meldNeed - meldPick.length }} 张</span>
+        </div>
+        <span v-else class="hint">门清（没有吃碰杠）</span>
+      </div>
+
+        <p v-if="meldNotice" class="meld-notice">{{ meldNotice }}</p>
+      </div>
+
+      <!--
+        右侧固定的按钮区：三个按钮**垂直排列**。
+        选中的那个会「按进去」（位移 2px + 阴影归零），而且**同时只能选一个**；
+        录完一组副露后自动弹回（见 confirmMeld → cancelMeld）。
+      -->
+      <div class="meld-btns">
+        <button
+          type="button"
+          class="meld-add-btn kind-run"
+          :class="{ on: meldMode === 'run' }"
+          @click="toggleMeld('run')"
+        >
+          吃
+        </button>
+        <button
+          type="button"
+          class="meld-add-btn kind-triplet"
+          :class="{ on: meldMode === 'triplet' }"
+          @click="toggleMeld('triplet')"
+        >
+          碰
+        </button>
+        <button
+          type="button"
+          class="meld-add-btn kind-daiminkan"
+          :class="{ on: meldMode === 'daiminkan' }"
+          @click="toggleMeld('daiminkan')"
+        >
+          明杠
+        </button>
+      </div>
+    </section>
+
     <!-- ============ 牌表（滚动）============ -->
     <div class="scroll">
       <div v-for="(row, ri) in PICKER_ROWS" :key="ri" class="picker-row">
@@ -211,18 +565,68 @@ const noticeClass = computed(() => {
           show-label
           clickable
           :dim="countKind(state, tile) >= 4"
-          @pick="pick(tile)"
+          @pick="meldMode ? pickMeldTile(tile) : pick(tile)"
         />
       </div>
     </div>
 
     <!-- ============ 提示（固定高度）============ -->
-    <p class="notice slot-notice" :class="noticeClass">{{ noticeText }}</p>
+    <!-- 提示条（固定高度）。
+         凑满 4 张同牌时，这里**原地变成**「这 4 张是杠吗？」+ 三个按钮 ——
+         不弹出新面板、不改变高度，所以不会把下方的牌表推开。
+         （下方牌表正是用户刚点过的地方，一推开就可能误触。） -->
+    <div class="notice slot-notice" :class="noticeClass">
+      <span class="notice-text">{{ noticeText }}</span>
+    </div>
+
+    <!-- ============ 试算结果（固定高度）============ -->
+    <!-- 开着试算时才有内容；关着就是一条空占位，不会让上面的牌表跳。 -->
+    <div v-if="game" class="trial-strip" :class="sandbox.tone">
+      <span class="trial-text">{{ sandbox.text }}</span>
+    </div>
 
     <!-- ============ 工具条 ============ -->
     <div class="tools">
+      <!-- 试算开关（Q11a 的「沙盒」）：改一张牌就实时重算 -->
+      <button
+        v-if="game"
+        type="button"
+        class="btn"
+        :class="{ 'btn-cyan': trial }"
+        :title="trial ? '关掉试算' : '开着时每改一张牌就实时重算'"
+        @click="trial = !trial"
+      >
+        {{ trial ? "试算中" : "试算" }}
+      </button>
       <button type="button" class="btn btn-yellow" @click="emit('openGuide')">役种速查</button>
       <button type="button" class="btn" @click="reset">全清</button>
+    </div>
+    <!-- ============ 「是杠吗？」追问弹窗 ============
+    <!--
+      用**全屏遮罩**，而不是内联在提示条里（Q2 的要求）：
+        内联的话，追问还开着的时候你仍能去点牌表 ——
+        而此时恰好有 4 张同牌，再点一张就是误操作。
+      遮罩保证必须先把这个问题回答掉。
+    -->
+    <div v-if="pendingKan" class="kan-overlay">
+      <div class="kan-card">
+        <p class="kan-q">这 4 张是杠吗？</p>
+        <div class="kan-tiles">
+          <TileImage :tile="pendingKan" size="sm" />
+          <TileImage :tile="pendingKan" size="sm" />
+          <TileImage :tile="pendingKan" size="sm" />
+          <TileImage :tile="pendingKan" size="sm" />
+        </div>
+        <div class="kan-actions">
+          <button type="button" class="btn btn-primary" @click="markKan(pendingKan, 'ankan')">
+            暗杠
+          </button>
+          <button type="button" class="btn btn-primary" @click="markKan(pendingKan, 'daiminkan')">
+            明杠
+          </button>
+          <button type="button" class="btn" @click="declineKan(pendingKan)">不是</button>
+        </div>
+      </div>
     </div>
   </div>
 </template>
@@ -343,9 +747,14 @@ const noticeClass = computed(() => {
 
 .slot-notice {
   flex: 0 0 auto;
-  min-height: 27px;
+  /* ⚠️ **固定高度**，不是 min-height。
+     凑满 4 张同牌时这里会原地变成「这 4 张是杠吗？」+ 三个按钮；
+     如果高度会变，提示条一长就把下方的牌表推下去 ——
+     而牌表正是用户刚点过的地方，一推开就可能误触。 */
+  height: 36px;
   display: flex;
   align-items: center;
+  gap: 4px;
 }
 
 .card-title {
@@ -469,13 +878,73 @@ const noticeClass = computed(() => {
   margin: 0;
   font-size: 11px;
   font-weight: 700;
-  padding: 5px 8px;
+  padding: 4px 8px;
   border: 1.5px solid var(--ink);
   border-radius: var(--radius-sm);
   box-shadow: var(--shadow-hard-sm);
+  /* 改成 flex 容器：文字和「暗杠/明杠/不是」三个按钮并排一行 */
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
+  width: 100%;
+}
+
+/* 普通文案：占满剩余宽度，超长省略 */
+.notice-text {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* ---------------- 「是杠吗？」追问弹窗 ---------------- */
+/* ⚠️ 全屏遮罩：追问开着的时候必须挡住其他操作。
+   内联在提示条里的话，你仍能去点牌表 ——
+   而此时恰好有 4 张同牌，再点一张就是误操作。 */
+.kan-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(26, 26, 26, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 30;
+  padding: 16px;
+}
+
+.kan-card {
+  width: 100%;
+  max-width: 300px;
+  background: var(--bg);
+  border: var(--line-bold) solid var(--ink);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-hard);
+  padding: 12px;
+}
+
+.kan-q {
+  margin: 0 0 8px;
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.kan-tiles {
+  display: flex;
+  gap: 3px;
+  justify-content: center;
+  margin-bottom: 8px;
+}
+
+.kan-actions {
+  display: flex;
+  gap: 5px;
+}
+.kan-actions .btn {
+  flex: 1;
+  min-height: 36px;
+  font-size: 12px;
+  padding: 4px 2px;
 }
 .notice-warn {
   background: var(--warn-bg);
@@ -488,6 +957,198 @@ const noticeClass = computed(() => {
   border-color: transparent;
   box-shadow: none;
   color: var(--ink-3);
+}
+
+/* ---------------- 副露 ---------------- */
+/* 平时只有一行「门清」；用不到吃碰时完全不占注意力 */
+.card-meld {
+  background: #e3f6f9;
+  /* 横向：左边是内容，右边是固定的按钮列 */
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  gap: 6px;
+}
+
+.meld-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.slot-meld .meld-body {
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+
+/*
+ * 右侧固定的按钮列：垂直排列。
+ *
+ * ⚠️ 和左边的内容区之间有一条**竖线分割** ——
+ *    不加的话，三个按钮看起来像是混在「门清」那行文字里的，
+ *    分不清哪块是信息、哪块是能点的。
+ */
+.meld-btns {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  justify-content: center;
+  /* 分割线 */
+  border-left: 2px solid var(--ink);
+  padding-left: 7px;
+  margin-left: 1px;
+}
+
+/*
+ * ⚠️ 点击目标不能太小。
+ *    原来写的是 font-size:9px + padding:1px 6px —— 实际高度只有约 14px，
+ *    远低于可点击的舒服尺寸（30px 上下），点起来很难受。
+ *    现在给了 min-height:30px + 更大内边距，并强制等宽（三个按钮一样宽）。
+ */
+.meld-add-btn {
+  font-size: 11px;
+  font-weight: 800;
+  padding: 6px 4px;
+  min-height: 30px;
+  /* 三个按钮等宽，竖排时整齐 */
+  width: 52px;
+  border: 2px solid var(--ink);
+  border-radius: var(--radius-sm);
+  background: #fff;
+  color: var(--ink);
+  cursor: pointer;
+  white-space: nowrap;
+  /* 硬阴影 —— 按下去时它归零，形成「压进去」的手感 */
+  box-shadow: 2px 2px 0 var(--ink);
+  transition: transform 0.06s ease, box-shadow 0.06s ease;
+}
+
+/*
+ * 三个按钮各自的颜色 —— 一眼能分清「吃 / 碰 / 明杠」。
+ * 绿色系 = 吃（顺子）、粉色 = 碰（刻子）、橙色 = 明杠。
+ * 这三个动作在规则上差别很大（碰/杠破门清的程度、符数都不同），
+ * 所以值得用颜色区分，而不是三个一样的白按钮。
+ */
+.meld-add-btn.kind-run {
+  background: var(--pop-green);
+}
+.meld-add-btn.kind-triplet {
+  background: var(--pop-pink);
+  color: #fff;
+}
+.meld-add-btn.kind-daiminkan {
+  background: var(--pop-yellow);
+}
+
+/* 选中：牌被按进去（位移 + 阴影消失），和牌表的按压效果一致。
+   颜色不变 —— 位移本身就够清楚，再改颜色反而和「按钮含义色」打架。 */
+.meld-add-btn.on {
+  transform: translate(2px, 2px);
+  box-shadow: 0 0 0 var(--ink);
+  /* 底色压暗一点，配合位移一起表达「按住了」 */
+  filter: brightness(0.94);
+}
+.meld-add-btn.cancel {
+  background: var(--pop-pink);
+  color: #fff;
+}
+
+.melds {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+}
+
+.meld {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 3px;
+  background: #fff;
+  border: 1.5px solid var(--ink);
+  border-radius: var(--radius-sm);
+  flex: 0 0 auto;
+}
+
+.meld-tiles,
+.meld-picked {
+  display: flex;
+  gap: 1px;
+}
+
+.meld-kind {
+  font-size: 10px;
+  font-weight: 900;
+}
+
+/* 删掉一组的 ✕：同样要有足够的点击区 */
+.meld-x {
+  border: none;
+  background: none;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 900;
+  cursor: pointer;
+  padding: 4px 6px;
+  min-width: 28px;
+  min-height: 28px;
+  line-height: 1;
+}
+
+.meld-picking {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.meld-notice {
+  margin: 3px 0 0;
+  font-size: 10px;
+  font-weight: 800;
+  color: var(--err-ink);
+}
+
+/* ---------------- 试算结果条 ----------------
+   ⚠️ 固定高度 —— 它随每次点牌变化，高度一变就会把上方的牌表推动，
+      而那里正是用户刚点过的位置。 */
+.trial-strip {
+  flex: 0 0 auto;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  padding: 4px 8px;
+  border: 1.5px solid var(--ink);
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  font-weight: 800;
+  overflow: hidden;
+}
+.trial-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 没录完：低调的中性色 */
+.trial-strip.idle {
+  background: transparent;
+  border-color: transparent;
+  color: var(--ink-3);
+}
+/* 有役：绿 */
+.trial-strip.ok {
+  background: var(--ok-bg);
+  box-shadow: var(--shadow-hard-sm);
+}
+/* 无役 / 不成立：粉 */
+.trial-strip.bad {
+  background: var(--warn-bg);
+  box-shadow: var(--shadow-hard-sm);
 }
 
 /* ---------------- 工具条 ---------------- */
