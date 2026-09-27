@@ -273,6 +273,19 @@ const MELD_LABEL: Record<string, string> = {
   shouminkan: "加杠",
 };
 
+/**
+ * 区分「鸣牌副露」和「暗杠」—— 这是**两个概念**。
+ *
+ *   鸣牌副露（吃 / 碰 / 明杠）→ 从别人那里要了牌，**破门清**
+ *   暗杠                     → 4 张全在自己手里，**不破门清**
+ *
+ * 引擎内部把两者都存成 meld（`ConcealedKan`），但显示时不能混在一起：
+ * 把暗杠摆在「副露」下面会让人以为它也破门清 —— 那是错的。
+ * 所以暗杠跟着「门前」显示。
+ */
+const calledMelds = computed(() => state.value.melds.filter((m) => m.kind !== "ankan"));
+const ankanMelds = computed(() => state.value.melds.filter((m) => m.kind === "ankan"));
+
 const meldNeed = computed(() => (meldMode.value === "daiminkan" ? 4 : 3));
 
 function startMeld(kind: "run" | "triplet" | "daiminkan") {
@@ -469,7 +482,26 @@ const noticeClass = computed(() => {
 
       <!-- 门前牌 -->
       <section class="card card-hand slot-hand">
-        <span class="card-title">门前</span>
+        <span class="card-title">
+          门前
+          <!--
+            暗杠显示在**门前**，不显示在副露区 ——
+            因为暗杠不破门清，它不是「鸣牌」。
+            放在副露下面会让人以为它也破门清。
+          -->
+          <span v-if="ankanMelds.length" class="ankan-strip">
+            <span class="ankan-label">暗杠</span>
+            <!--
+              **一张牌面 + ×4**，而不是 4 张牌图 ——
+              门前那一行本来就是按 13 格排的，塞 4 张会把标题行撑高、挤到牌表。
+              留一张牌面是为了还能一眼认出是哪张牌；右边用「×4」说明是杠。
+            -->
+            <span v-for="m in ankanMelds" :key="m.id" class="ankan-group">
+              <TileImage :tile="m.tiles[0]!" size="lg" />
+              <span class="ankan-count">×4</span>
+            </span>
+          </span>
+        </span>
         <div class="slot-body">
           <div v-if="state.concealed.length" class="tiles">
             <TileImage
@@ -498,15 +530,22 @@ const noticeClass = computed(() => {
         <span class="card-title">副露</span>
 
       <div class="slot-body meld-body">
-        <div v-if="state.melds.length" class="melds">
-          <div v-for="m in state.melds" :key="m.id" class="meld">
+        <div v-if="calledMelds.length" class="melds">
+          <!--
+            点这组牌就删掉它 —— 和「门前」的操作一致（门前也是点一下删一张）。
+            原来要靠右边那个 ✕，既占地方、竖排按钮后也不好点。
+          -->
+          <div
+            v-for="m in calledMelds"
+            :key="m.id"
+            class="meld"
+            title="点一下删掉这组"
+            @click="deleteMeld(m.id)"
+          >
             <span class="meld-tiles">
-              <TileImage v-for="(t, i) in m.tiles" :key="i" :tile="t" size="sm" />
+              <TileImage v-for="(t, i) in m.tiles" :key="i" :tile="t" size="lg" />
             </span>
             <span class="meld-kind">{{ MELD_LABEL[m.kind] }}</span>
-            <button type="button" class="meld-x" title="删掉这组" @click="deleteMeld(m.id)">
-              ✕
-            </button>
           </div>
         </div>
         <div v-else-if="meldMode" class="meld-picking">
@@ -515,7 +554,7 @@ const noticeClass = computed(() => {
           </span>
           <span class="hint">在下面点 {{ meldNeed - meldPick.length }} 张</span>
         </div>
-        <span v-else class="hint">门清（没有吃碰杠）</span>
+        <span v-else class="hint">门清（没有吃碰）</span>
       </div>
 
         <p v-if="meldNotice" class="meld-notice">{{ meldNotice }}</p>
@@ -862,7 +901,16 @@ const noticeClass = computed(() => {
   display: flex;
   flex-direction: column;
   gap: 3px;
-  padding: 2px 0;
+  padding: 4px;
+  /*
+   * ⚠️ 需要一圈边框。
+   *    没有边框时，这块看起来和上面的卡片是同一种东西 ——
+   *    完全意识不到它是**可以滚动**的区域（牌表有 5 行，小屏要滑）。
+   *    边框把它框成一个独立的「面板」，滚动的暗示就出来了。
+   */
+  border: 2px solid var(--ink);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.55);
 }
 
 /* 牌表：固定 9 列。和门前同一套做法 —— 手算宽度这种事不再存在。 */
@@ -959,6 +1007,65 @@ const noticeClass = computed(() => {
   color: var(--ink-3);
 }
 
+/*
+ * 暗杠：跟在「门前」的标题行里。
+ *
+ * ⚠️ 这一行必须**固定高度**。
+ *
+ *    暗杠条是有/无都可能的状态 —— 如果高度随它变化，
+ *    那么每次标了暗杠、或者删掉暗杠，下面的牌表都会被推动一下。
+ *    而牌表正是用户刚点过的地方，一推开就可能误触。
+ *
+ *    所以：标题行给固定的 min-height，暗杠牌面也缩小到刚好放得下。
+ */
+.slot-hand .card-title {
+  /* 30px = 暗杠牌面 24px + 内边距 2px + 边框 3px + 余量 */
+  min-height: 30px;
+  align-items: center;
+}
+
+.ankan-strip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  opacity: 1;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+/* 暗杠的牌面缩小到 18×24（保持 3:4 的牌面比例），
+   这样固定高度不用给太大 */
+.ankan-group :deep(.body) {
+  width: 18px;
+  height: 24px;
+}
+.ankan-label {
+  font-size: 9px;
+  font-weight: 800;
+  padding: 1px 5px;
+  background: var(--pop-yellow);
+  border: 1.5px solid var(--ink);
+  border-radius: 999px;
+  white-space: nowrap;
+}
+/* 一组暗杠：一张牌面 + ×4 */
+.ankan-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  padding: 1px 3px 1px 1px;
+  background: #fff;
+  border: 1.5px solid var(--ink);
+  border-radius: var(--radius-sm);
+}
+
+.ankan-count {
+  font-size: 10px;
+  font-weight: 900;
+  line-height: 1;
+  white-space: nowrap;
+}
+
 /* ---------------- 副露 ---------------- */
 /* 平时只有一行「门清」；用不到吃碰时完全不占注意力 */
 .card-meld {
@@ -977,12 +1084,23 @@ const noticeClass = computed(() => {
   flex-direction: column;
 }
 
+/*
+ * 副露区：**换行，不横向滚动**。
+ *
+ * 右边被按钮列占掉之后，左边只剩窄窄一条 ——
+ * 横向滚动在这里很糟（看不到后面还有多少、又容易误触）。
+ * 所以副露组多了就往下换行，最多两行。
+ *
+ * 高度：一行起、两行封顶。不写死成两行高是因为
+ * 「没有副露」是最常见的情况，那样会白占掉一大块。
+ */
 .slot-meld .meld-body {
-  min-height: 32px;
+  min-height: 34px;
+  /* 两行封顶（一行约 35px + 间隙） */
+  max-height: 74px;
   display: flex;
   align-items: center;
-  overflow-x: auto;
-  overscroll-behavior-x: contain;
+  overflow: hidden;
 }
 
 /*
@@ -1060,10 +1178,28 @@ const noticeClass = computed(() => {
 
 .melds {
   display: flex;
-  gap: 5px;
+  /* 换行，不横向滚动 */
+  flex-wrap: wrap;
+  gap: 4px;
   align-items: center;
+  align-content: center;
+  /* 让每一组按自身宽度排，不要被拉伸 */
+  width: 100%;
 }
 
+/*
+ * 一组副露。**整组可点** —— 点一下就删掉（和门前的操作一致）。
+ *
+ * ⚠️ 里面的牌图必须 `pointer-events: none`。
+ *
+ *    TileImage 渲染的是一个 `<button>`，而这里的牌没传 `clickable`，
+ *    所以那个 button 是 **disabled** 的。
+ *    **浏览器里点击 disabled button，事件不会冒泡到父元素** ——
+ *    于是点「牌面那部分」时父元素的 @click 根本收不到，
+ *    看起来就是「点了没反应」。
+ *
+ *    让牌图不接收指针事件，点击就落到整组上了。
+ */
 .meld {
   display: flex;
   align-items: center;
@@ -1073,6 +1209,15 @@ const noticeClass = computed(() => {
   border: 1.5px solid var(--ink);
   border-radius: var(--radius-sm);
   flex: 0 0 auto;
+  cursor: pointer;
+}
+.meld:active {
+  transform: translate(1.5px, 1.5px);
+}
+
+/* 牌图不接收点击，让点击落到整组上（见上面对 disabled button 的说明） */
+.meld :deep(.tile) {
+  pointer-events: none;
 }
 
 .meld-tiles,
@@ -1086,19 +1231,6 @@ const noticeClass = computed(() => {
   font-weight: 900;
 }
 
-/* 删掉一组的 ✕：同样要有足够的点击区 */
-.meld-x {
-  border: none;
-  background: none;
-  color: var(--ink);
-  font-size: 14px;
-  font-weight: 900;
-  cursor: pointer;
-  padding: 4px 6px;
-  min-width: 28px;
-  min-height: 28px;
-  line-height: 1;
-}
 
 .meld-picking {
   display: flex;

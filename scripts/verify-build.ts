@@ -349,7 +349,8 @@ if (cssMatch) {
   // 所以现在是正向检查：确认它**存在**，别哪天被误删。
   console.log("\n【副露录入 UI 必须在】");
   {
-    const meldCss = ["card-meld", "slot-meld", "meld-add-btn", "meld-kind", "meld-x"];
+    // ⚠️ 不要用 `meld-x` —— 那个 ✕ 按钮已经去掉了（改成整组可点删除）。
+const meldCss = ["card-meld", "slot-meld", "meld-add-btn", "meld-kind", "melds", "meld-tiles"];
     for (const cls of meldCss) {
       if (cssMin.includes(cls)) {
         pass++;
@@ -367,7 +368,7 @@ if (cssMatch) {
       ["吃按钮", "吃"],
       ["碰按钮", "碰"],
       ["明杠按钮", "明杠"],
-      ["门清淡文案", "门清（没有吃碰杠）"],
+      ["门清淡文案", "门清（没有吃碰）"],
       ["吃形态校验", "吃需要连续的三张"],
     ];
     for (const [label, needle] of meldStrings) {
