@@ -627,7 +627,8 @@ const noticeClass = computed(() => {
          不弹出新面板、不改变高度，所以不会把下方的牌表推开。
          （下方牌表正是用户刚点过的地方，一推开就可能误触。） -->
     <div class="notice slot-notice" :class="noticeClass">
-      <span class="notice-text">{{ noticeText }}</span>
+      <!-- title 只是兜底：条内能舒服地放两行，更长的文案在桌面端悬浮可见 -->
+      <span class="notice-text" :title="noticeText">{{ noticeText }}</span>
     </div>
 
     <!-- ============ 试算结果（固定高度）============ -->
@@ -803,11 +804,20 @@ const noticeClass = computed(() => {
 
 .slot-notice {
   flex: 0 0 auto;
-  /* ⚠️ **固定高度**，不是 min-height。
-     凑满 4 张同牌时这里会原地变成「这 4 张是杠吗？」+ 三个按钮；
-     如果高度会变，提示条一长就把下方的牌表推下去 ——
-     而牌表正是用户刚点过的地方，一推开就可能误触。 */
-  height: 36px;
+  /* ⚠️ 是 **min-height**，不是固定 height。
+     原来写死 height: 36px，再配上 .notice-text 的 nowrap + ellipsis，
+     结果长文案被静默截成「牌形不成立（凑不成 4 组面子 + 1 对雀头）—— 换成下…」，
+     而且没有 tooltip —— 用户**根本看不到完整提示**（实测报上来的 bug）。
+
+     38px = 3px 边框 + 8px 内边距 + 2 × 13.5px 行高 —— 正好是**两行**的高度。
+       · 单行文案：文字盒 24.5px，靠 min-height 补到 38px（上下留白，和原来一样）；
+       · 两行文案：文字盒正好 38px。
+     ⇒ 一行和两行的槽高**完全相同**，防抖动这条设计原则依然成立。
+        只有超过两行的极端文案才会把下面的牌表（flex:1 的滚动区）压缩几像素 ——
+        那也比让人看不见强。
+
+     （比原来的 36px 高 2px，是刻意取「两行高度」的结果，不是笔误。） */
+  min-height: 38px;
   display: flex;
   align-items: center;
   gap: 4px;
@@ -955,12 +965,16 @@ const noticeClass = computed(() => {
   width: 100%;
 }
 
-/* 普通文案：占满剩余宽度，超长省略 */
+/* 普通文案：占满剩余宽度；超长时**换行**，不再截成「…」
+   —— nowrap + ellipsis 会让用户永远读不到完整提示，没有 tooltip 可救。 */
 .notice-text {
+  flex: 1 1 auto;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  /* 行高写死（不是 normal），这样行数→高度是可算的：
+     两行 = 27px，配上边框和内边距正好 38px，也就是 .slot-notice 的 min-height
+     —— 所以「一行」和「两行」的提示条高度完全相同，下方内容不会被推动。 */
+  line-height: 13.5px;
+  overflow-wrap: anywhere;
 }
 
 /* ---------------- 「是杠吗？」追问弹窗 ---------------- */
