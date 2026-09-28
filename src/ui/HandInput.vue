@@ -31,13 +31,14 @@ import { formatSandboxResult } from "./sandbox-result.ts";
 import { precheckBlocks, precheckHand, type PrecheckResult } from "./hand-precheck.ts";
 import { isWinningShape } from "./hand-shape.ts";
 import { tileLabel } from "./tiles.ts";
-import type { ScoreError, ScoreResult } from "../score/types.ts";
+import type { ScoreError, ScoreResult, WinType } from "../score/types.ts";
 import {
   addTile,
   expectedPhysicalCount,
   kanCandidate,
   physicalTileCount,
   promoteToKan,
+  unpromoteKan,
   addMeld,
   checkMeldShape,
   removeMeld,
@@ -83,6 +84,17 @@ const emit = defineEmits<{
    *    进不去场况页，也就永远勾不上立直，那手牌直接卡死。
    */
   (e: "precheck", block: boolean): void;
+  /**
+   * 在录入页切「荣和 / 自摸」时，把整个场况回传给 App。
+   *
+   * ⚠️ 和了方式**不是手牌的一部分**，它是场况（`GameState.winType`），
+   *    归 App 持有 —— 所以这里不能自己存一份，必须回传。
+   *
+   *    这么做的**好处**：录入页和场况页改的是同一个字段，
+   *    两处天然同步，不存在「这页说自摸、那页说荣和」的可能。
+   *    （对比：如果这里存个本地的 ref，就要写同步代码，而同步代码一定会漏。）
+   */
+  (e: "update:game", game: GameState): void;
 }>();
 
 const state = ref<HandState>(props.modelValue ?? createEmptyHand());
@@ -155,6 +167,26 @@ function reset() {
   declinedKan.value = new Set();
 }
 
+/**
+ * 切「荣和 / 自摸」—— 和牌张**是怎么来的**，正是这两者的区别。
+ *
+ * 所以这对按钮长在「和牌张」那张卡片上，而不是只藏在场况页里：
+ * 录这张牌的时候你一定知道它是摸的还是别人打的；等走到场况页，你已经忘了。
+ *
+ * ⚠️ 改的是**场况**（`GameState.winType`），不是手牌 —— 所以要回传给 App，
+ *    不能在组件里自己存一份。回传之后场况页里那对同样的按钮会自动跟着变：
+ *    两边改的是同一个字段，没有第二份真相可以走偏。
+ *
+ * 另外这条**必须真的接上**（App 的 @update:game），否则点了没反应 ——
+ * 和「暗杠点了没反应」是同一类坑，见 __tests__/win-type.test.ts 的静态断言。
+ */
+function setWinType(w: WinType) {
+  const g = props.game;
+  // 同一个值就不回传：免得 App 白建一次 game 对象、触发下游重算
+  if (!g || g.winType === w) return;
+  emit("update:game", { ...g, winType: w });
+}
+
 // ---------------------------------------------------------------- 派生
 
 const expected = computed(() => expectedConcealedCount(state.value.melds));
@@ -214,6 +246,17 @@ watch(
 function markKan(tile: string, kind: "ankan" | "daiminkan") {
   state.value = promoteToKan(state.value, tile, kind);
   declinedKan.value = new Set();
+}
+
+/**
+ * 取消一组暗杠 —— 点门前标题行里那组牌。
+ *
+ * 走 `unpromoteKan` 而不是 `removeMeld`：暗杠那 4 张本来就是自己门前的牌
+ * （`promoteToKan` 搬过去的），取消是**撤销**，4 张要退回门前。
+ * 吃 / 碰的牌来自别人，删掉就是删掉，不能退回 —— 所以两者不能共用一个动作。
+ */
+function cancelKan(id: number) {
+  state.value = unpromoteKan(state.value, id);
 }
 
 /**
@@ -479,7 +522,39 @@ const noticeClass = computed(() => {
     <div class="pinned">
       <!-- 和牌张 -->
       <section class="card card-winning slot-win" :class="{ awaiting: awaitingWinning }">
-        <span class="card-title">和牌张</span>
+        <span class="card-title">
+          和牌张
+          <!--
+            和了方式（荣和 / 自摸）就放在这儿 —— 它决定的正是这张牌的**来源**，
+            没有比「和牌张」旁边更贴切的位置了。
+
+            ⚠️ 切的是场况（GameState.winType），所以 emit 给 App 而不是本地存。
+               场况页里那对一模一样的按钮改的是同一个字段 ⇒ 自动同步。
+
+            `game` 是可选 prop（组件要能单独渲染），没传就不显示这两个按钮 ——
+            不猜默认值，也别在没场况的时候假装有。
+          -->
+          <span v-if="game" class="win-type-seg">
+            <button
+              type="button"
+              class="wt-btn"
+              :class="{ on: game.winType === 'ron' }"
+              title="别人打出来的那张牌"
+              @click="setWinType('ron')"
+            >
+              荣和
+            </button>
+            <button
+              type="button"
+              class="wt-btn"
+              :class="{ on: game.winType === 'tsumo' }"
+              title="自己摸到的这张牌"
+              @click="setWinType('tsumo')"
+            >
+              自摸
+            </button>
+          </span>
+        </span>
         <div class="winning-body">
           <TileImage
             v-if="state.winningTile"
@@ -508,7 +583,18 @@ const noticeClass = computed(() => {
               门前那一行本来就是按 13 格排的，塞 4 张会把标题行撑高、挤到牌表。
               留一张牌面是为了还能一眼认出是哪张牌；右边用「×4」说明是杠。
             -->
-            <span v-for="m in ankanMelds" :key="m.id" class="ankan-group">
+            <!--
+              **整组可点 = 取消这个暗杠**，和副露的「点一下删掉这组」保持一致。
+              但取消是撤销（4 张退回门前），不是删除 —— 理由见
+              hand-state.ts 的 unpromoteKan。
+            -->
+            <span
+              v-for="m in ankanMelds"
+              :key="m.id"
+              class="ankan-group"
+              title="点一下取消这个暗杠（4 张退回门前）"
+              @click="cancelKan(m.id)"
+            >
               <TileImage :tile="m.tiles[0]!" size="lg" />
               <span class="ankan-count">×4</span>
             </span>
@@ -776,6 +862,50 @@ const noticeClass = computed(() => {
   display: flex;
   align-items: center;
   gap: 5px;
+}
+
+/*
+ * 「荣和 / 自摸」小切换 —— 长在「和牌张」标题行的右侧。
+ *
+ * ⚠️ 高度必须压在 15px 以内。
+ *
+ *    .card-title 原来是按 9px 字排的（≈11.7px 高）。这对按钮要是让它长太多，
+ *    整张卡片就变高，而牌面区（.pinned）是钉住的 —— 多出来的高度只能从
+ *    下面的牌表（flex:1）身上扣。
+ *    15px = 9px 字 + 1.5px×2 内边距 + 1.5px×2 边框，已经是还能点得中的最小尺寸，
+ *    所以这张卡片实测只高了约 3px —— 一次性变化，不是运行时抖动。
+ */
+.win-type-seg {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  /* 覆盖 .card-title 的 letter-spacing：那是给标题字排的，按钮上会散开 */
+  letter-spacing: normal;
+}
+
+.wt-btn {
+  font: inherit;
+  font-size: 9px;
+  font-weight: 800;
+  line-height: 1;
+  padding: 1.5px 5px;
+  color: var(--ink-3);
+  background: #fff;
+  border: 1.5px solid var(--ink);
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+/* 选中态用「实心深底 + 白字」而不是浅色描边：
+   父级 .card-title 带 opacity: 0.65（整个子树都被淡化，子元素没法自己救回来），
+   所以只有强对比在淡化后还能一眼看出选的是哪个。 */
+.wt-btn.on {
+  color: #fff;
+  background: var(--ink);
+}
+
+.wt-btn:active {
+  transform: translate(1px, 1px);
 }
 
 .slot-hand {
@@ -1079,7 +1209,7 @@ const noticeClass = computed(() => {
   border-radius: 999px;
   white-space: nowrap;
 }
-/* 一组暗杠：一张牌面 + ×4 */
+/* 一组暗杠：一张牌面 + ×4。**整组可点 = 取消这个暗杠** */
 .ankan-group {
   display: inline-flex;
   align-items: center;
@@ -1088,6 +1218,31 @@ const noticeClass = computed(() => {
   background: #fff;
   border: 1.5px solid var(--ink);
   border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+/*
+ * ⚠️ 牌图必须**不接收指针事件**。
+ *
+ *   TileImage 渲染的是一个 `<button>`，这里没传 `clickable` ⇒ 它是 **disabled** 的，
+ *   而浏览器里**点击 disabled button 事件不会冒泡到父元素** ——
+ *   点「牌面那部分」时父元素的 @click 根本收不到，看起来就是「点了没反应」。
+ *   （副露的 .meld 踩过同一个坑，见那边的注释。）
+ *
+ *   「暗杠点了没反应」有两个成因，这是第二个；第一个是压根没绑 @click。
+ *   两个一起改才算真的能点。
+ */
+.ankan-group :deep(.tile) {
+  pointer-events: none;
+}
+
+/*
+ * 按下反馈。只做位移，**一个尺寸都不改** ——
+ * 这个标题行是固定高度（见 .slot-hand .card-title）：一改尺寸，
+ * 下面的牌表就会被推动，而牌表正是用户刚点过的地方。
+ */
+.ankan-group:active {
+  transform: translate(1.5px, 1.5px);
 }
 
 .ankan-count {

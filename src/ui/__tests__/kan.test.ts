@@ -13,8 +13,13 @@
  *
  * 3. **物理张数与逻辑张数是两个口径** —— 界面只展示物理的。
  *    没有杠时都是 14；1 个杠时逻辑仍是 14、物理是 15。
+ *
+ * 4. **取消暗杠是「撤销」，不是「删除」** —— 那 4 张本来就是自己门前的牌
+ *    （`promoteToKan` 就是从门前搬走的），取消时必须退回门前。
+ *    碰 / 明杠不能这么退：那些牌是从别人那里要来的。
  */
 import {
+  addMeld,
   addTile,
   clearAll,
   countKind,
@@ -25,6 +30,8 @@ import {
   kanCandidate,
   physicalTileCount,
   promoteToKan,
+  setMeldKind,
+  unpromoteKan,
   type HandState,
 } from "../hand-state.ts";
 
@@ -273,6 +280,120 @@ test("全清后不残留副露", () => {
   eq(cleared.melds.length, 0, "没有副露");
   eq(cleared.concealed.length, 0, "没有门前牌");
   eq(expectedPhysicalCount(cleared.melds), 14, "目标回到 14");
+});
+
+// ============================================================
+console.log("\n【6】unpromoteKan：取消暗杠 = 撤销，不是删除");
+// ============================================================
+//
+// 这一段防的是「门的暗杠点了没反应 / 点了 4 张牌就没了」——
+// 暗杠那 4 张本来就是自己门前的牌，取消之后必须退回门前。
+
+test("取消暗杠：4 张退回门前，副露清空", () => {
+  const s0 = feed(createEmptyHand(), ["3m","3m","3m","3m","1p","2p","3p"]);
+  const kan = promoteToKan(s0, "3m", "ankan");
+  eq(kan.concealed.length, 3, "标杠后门前 3 张");
+
+  const back = unpromoteKan(kan, kan.melds[0]!.id);
+  eq(back.melds.length, 0, "没有副露了");
+  eq(back.concealed.length, 7, "7 张全回到门前");
+  // 顺序按 sortTiles 的既有约定：m → p → s → z（见 tiles.ts 的 SUIT_ORDER）
+  eq(back.concealed, ["3m","3m","3m","3m","1p","2p","3p"], "内容与排序");
+  eq(expectedConcealedCount(back.melds), 13, "门前目标回到 13");
+});
+
+test("可逆：promote → unpromote 完全回到原状态", () => {
+  const s0 = feed(createEmptyHand(), ["3m","3m","3m","3m","1p","2p","3p"]);
+  const kan = promoteToKan(s0, "3m", "ankan");
+  const back = unpromoteKan(kan, kan.melds[0]!.id);
+  eq(back.concealed, s0.concealed, "门前牌完全一致");
+  eq(back.melds.length, s0.melds.length, "副露数一致");
+  eq(back.winningTile, s0.winningTile, "和牌张一致");
+  eq(back.notice, "已取消杠，4 张退回门前。", "干净的一句提示");
+});
+
+test("还没补过牌时退回正好：门前 13 张，不多不少", () => {
+  // 13 张里 3m 占 4 张 → 标杠 → 门前 9、目标 10（界面会要求再补 1 张）
+  const s0 = feed(createEmptyHand(), [
+    "3m","3m","3m","3m","1p","2p","3p","4p","5p","6p","7s","8s","5z",
+  ]);
+  eq(s0.concealed.length, 13, "门前 13");
+  const kan = promoteToKan(s0, "3m", "ankan");
+  eq(kan.concealed.length, 9, "标杠后 9 张");
+  eq(expectedConcealedCount(kan.melds), 10, "目标降到 10（差 1 张）");
+
+  const back = unpromoteKan(kan, kan.melds[0]!.id);
+  eq(back.concealed.length, 13, "退回来正好 13 张");
+  eq(back.concealed.length, expectedConcealedCount(back.melds), "正好凑满，不超");
+});
+
+test("已经补过牌时退回会多 1 张 —— 只提示，不替用户删", () => {
+  const s0 = feed(createEmptyHand(), [
+    "3m","3m","3m","3m","1p","2p","3p","4p","5p","6p","7s","8s","5z",
+  ]);
+  let s = promoteToKan(s0, "3m", "ankan");
+  s = feed(s, ["6s"]);
+  eq(s.concealed.length, 10, "补到门前 10 张");
+
+  const back = unpromoteKan(s, s.melds[0]!.id);
+  eq(back.concealed.length, 14, "退回来 14 张（比目标多 1）");
+  eq(expectedConcealedCount(back.melds), 13, "目标是 13");
+  ok(back.notice !== null, "应给提示");
+  ok(
+    back.notice!.includes("多了 1 张"),
+    `提示要说明超出几张，实际：${back.notice}`,
+  );
+});
+
+test("和牌张一并重置（门前张数变了，那份认定的前提就没了）", () => {
+  const s0 = feed(createEmptyHand(), [
+    "3m","3m","3m","3m","1p","2p","3p","4p","5p","6p","7s","8s","5z",
+  ]);
+  let s = promoteToKan(s0, "3m", "ankan");
+  s = feed(s, ["6s","9s"]);
+  eq(s.winningTile, "9s", "已有和牌张");
+
+  const back = unpromoteKan(s, s.melds[0]!.id);
+  eq(back.winningTile, null, "和牌张被重置");
+  ok(back.notice!.includes("和牌张"), `提示要说明原因，实际：${back.notice}`);
+});
+
+test("非暗杠一律原样返回 —— 碰 / 明杠的牌不能退回门前", () => {
+  // 碰的 3 张来自别人，退回门前等于谎称「这是我自己摸的」
+  const pon = addMeld(createEmptyHand(), ["5z","5z","5z"]);
+  eq(unpromoteKan(pon, pon.melds[0]!.id), pon, "碰：不变");
+
+  // 明杠的 4 张里有 1 张是别人打的，同样不能整组退回
+  const raw = addMeld(createEmptyHand(), ["5z","5z","5z","5z"]);
+  const dai = setMeldKind(raw, raw.melds[0]!.id, "daiminkan");
+  eq(dai.melds[0]!.kind, "daiminkan", "先确认它确实被改成明杠了");
+  eq(unpromoteKan(dai, dai.melds[0]!.id), dai, "明杠：不变");
+});
+
+test("id 不存在时原样返回（不崩）", () => {
+  const s = feed(createEmptyHand(), ["3m","3m","3m","3m"]);
+  eq(unpromoteKan(s, 9999), s, "不变");
+});
+
+test("取消之后再标回来，手牌仍然完整（端到端）", () => {
+  const s0 = feed(createEmptyHand(), [
+    "3m","3m","3m","3m","1p","2p","3p","4p","5p","6p","7s","8s","5z",
+  ]);
+  let s = promoteToKan(s0, "3m", "ankan");
+  s = unpromoteKan(s, s.melds[0]!.id);
+  eq(s.concealed.length, 13, "退回后 13 张");
+
+  // 再标一次：应该是同样的结果
+  s = promoteToKan(s, "3m", "ankan");
+  eq(s.melds.length, 1, "又有一组杠");
+  eq(s.concealed.length, 9, "门前又是 9 张");
+  eq(expectedConcealedCount(s.melds), 10, "目标又是 10");
+
+  // 补满 + 和牌张
+  s = feed(s, ["6s","9s"]);
+  eq(s.winningTile, "9s", "和牌张");
+  eq(isComplete(s), true, "完整");
+  eq(physicalTileCount(s), 15, "物理 15 张 = 10 + 4 + 1");
 });
 
 // // ============================================================

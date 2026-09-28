@@ -314,6 +314,7 @@ function editGame() {
           :class="{ hidden: showSettings }"
           @open-guide="sheet = { kind: 'guide' }"
           @precheck="handBlocked = $event"
+          @update:game="game = $event"
         />
 
         <!-- 场况：录完牌后展开 -->

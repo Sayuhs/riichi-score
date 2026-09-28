@@ -388,6 +388,57 @@ export function promoteToKan(
 }
 
 /**
+ * 取消一组**暗杠**，把 4 张牌退回门前。
+ *
+ * ## 为什么不能直接复用 `removeMeld`
+ *
+ * 吃 / 碰的牌是从**别人那里**要来的 —— 删掉这组就是「这 3 张不属于我」，
+ * 牌从手牌里消失是对的。
+ *
+ * 暗杠完全不同：那 4 张**一直是自己的牌**（`promoteToKan` 就是从门前
+ * 把它们搬走的）。删掉时如果让它们凭空消失，用户就得重新点 4 次 ——
+ * 而他的意思明明只是「这个杠标错了 / 我不要了」。
+ * 所以这个动作做的是**撤销**，不是删除。
+ *
+ * ## 退回之后门前可能多 1 张 —— 只提示，不替用户删
+ *
+ * 标杠时门前目标从 13 掉到 10（少 3 张），但那组杠占 4 张实体牌，
+ * 所以界面会要求用户再补 1 张（物理张数才回到 15）。
+ * 取消杠时 4 张全退回来，若他已经补过，门前就会多出 1 张。
+ *
+ * 这不是算错，而是真实信息：拆掉杠之后，那 4 张里有 1 张是多余的。
+ * 删哪一张只有用户知道，所以这里只给出张数，让他自己决定。
+ *
+ * @param id 要取消的那组暗杠。**kind 不是 `ankan` 时原样返回** ——
+ *           明杠 / 加杠的 4 张里有一张是别人打的牌，「退回门前」不成立。
+ */
+export function unpromoteKan(state: HandState, id: number): HandState {
+  const meld = state.melds.find((m) => m.id === id);
+  if (!meld || meld.kind !== "ankan") return state;
+
+  const melds = state.melds.filter((m) => m.id !== id);
+  const back = sortTiles([...state.concealed, ...meld.tiles]);
+  const over = back.length - expectedConcealedCount(melds);
+
+  const parts = ["已取消杠，4 张退回门前"];
+  if (over > 0) parts.push(`门前多了 ${over} 张，请删掉`);
+  if (state.winningTile) {
+    // 和牌张是「门前满员之后再点的那张」自动认定的（见 afterWithdraw），
+    // 门前张数一变，那份认定的前提就没了。
+    parts.push("和牌张也一并重置了 —— 请重新点最后一张");
+  }
+
+  return {
+    ...state,
+    concealed: back,
+    melds,
+    winningTile: null,
+    notice: `${parts.join("；")}。`,
+    textErrors: [],
+  };
+}
+
+/**
  * 校验一组副露的形态是否合法。返回 `null` 表示合法。
  *
  * ## 为什么要自己做（引擎也会校验）
