@@ -73,6 +73,22 @@ const HAND = read("../HandInput.vue");
 const SETTINGS = read("../GameSettings.vue");
 const APP = read("../../App.vue");
 
+/**
+ * 去掉 `/* … *\/` 块注释之后再断言 —— **CSS 断言一律用这个**。
+ *
+ * ⚠️ 不是洁癖，是被自己的文档绊过一次：
+ *    源码里刻意留着一句「这里**不写** `.wt-btn:active`」（那是最重要的设计说明），
+ *    可拿裸文本一匹配，这句注释自己就被判成了「存在 :active 规则」——
+ *    测试反过来骂自己的文档。
+ *    断言的是**代码**，所以先把注释剥掉。
+ */
+function stripBlockComments(src: string): string {
+  return src.replace(/\/\*[\s\S]*?\*\//g, "");
+}
+
+/** 只剩代码（注释已剥）的 HandInput.vue */
+const HAND_CODE = stripBlockComments(HAND);
+
 // ============================================================
 console.log("\n【1】录入页：按钮真的存在，并且绑在 setWinType 上");
 // ============================================================
@@ -207,6 +223,18 @@ test("选中态用实心深底：父级 .card-title 有 opacity，浅色描边�
     /\.wt-btn\.on\s*\{[\s\S]*?background:\s*var\(--ink\)/.test(HAND),
     ".wt-btn.on 应该用 var(--ink) 实心底，才能穿过 .card-title 的 opacity 看出来",
   );
+});
+
+test("★ 不做按下位移 —— 上面就是牌面，一挪会让人以为牌也在动", () => {
+  ok(!/\.wt-btn:active/.test(HAND_CODE), ".wt-btn 不该有 :active 规则（按下去会位移）");
+  ok(
+    !/\.wt-btn\s*\{[^}]*transform/.test(HAND_CODE),
+    ".wt-btn 本体也不该带 transform —— 要反馈就用不改位置的方式（颜色）",
+  );
+});
+
+test("暗杠那一组同理：点完它就整条消失，不需要按下位移", () => {
+  ok(!/\.ankan-group:active/.test(HAND_CODE), ".ankan-group 不该有 :active 规则");
 });
 
 // ============================================================

@@ -904,9 +904,18 @@ const noticeClass = computed(() => {
   background: var(--ink);
 }
 
-.wt-btn:active {
-  transform: translate(1px, 1px);
-}
+/*
+ * ⚠️ 刻意**不写** `.wt-btn:active` —— 按下去不留任何位移。
+ *
+ *   这对按钮正上方/正下方就是「和牌张」的牌面，按钮一挪，视线里牌也跟着动了。
+ *   （同一个理由在 GameSettings.vue 的 .ind-label 上已经写过一次：
+ *     「按下去的位移会让人以为牌也在动」。）
+ *
+ *   反馈够不够？点完选中态立刻从空心变实心（或反过来）——
+ *   状态变化本身就是反馈，不需要再叠一层按下位移。
+ *
+ *   ⇒ 要加反馈就加**不改位置**的（颜色之类）；translate / transform 一律不要。
+ */
 
 .slot-hand {
   display: flex;
@@ -1237,13 +1246,14 @@ const noticeClass = computed(() => {
 }
 
 /*
- * 按下反馈。只做位移，**一个尺寸都不改** ——
- * 这个标题行是固定高度（见 .slot-hand .card-title）：一改尺寸，
- * 下面的牌表就会被推动，而牌表正是用户刚点过的地方。
+ * ⚠️ 这里也**刻意不写** `.ankan-group:active` —— 不留按下位移。
+ *
+ *   这个标题行下面 3px 就是门前的牌面，整组一挪，看起来像牌也跟着动了。
+ *   和 .wt-btn、GameSettings 的 .ind-label 是同一条理由。
+ *
+ *   反馈够不够？够了：点完这一整组暗杠就消失了（4 张退回门前）。
+ *   状态变化本身就是反馈，不需要按下位移再叠一层。
  */
-.ankan-group:active {
-  transform: translate(1.5px, 1.5px);
-}
 
 .ankan-count {
   font-size: 10px;
