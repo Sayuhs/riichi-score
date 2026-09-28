@@ -307,7 +307,7 @@ export const YAKU_LIST: YakuInfo[] = [
     ja: "三色同順",
     closedHan: 2,
     openHan: 1,
-    how: "万筒索各有一组数字相同的顺子",
+    how: "万饼条各有一组数字相同的顺子",
     exampleTiles: {
       concealed: ["2m","3m","4m","2p","3p","4p","2s","3s","4s","7m","7m","9m","9m"],
       winning: "7m",
@@ -429,7 +429,7 @@ export const YAKU_LIST: YakuInfo[] = [
     ja: "三色同刻",
     closedHan: 2,
     openHan: 2,
-    how: "万筒索各有一组数字相同的刻子",
+    how: "万饼条各有一组数字相同的刻子",
     exampleTiles: {
       concealed: ["2p","2p","2p","2s","2s","2s","5z","5z","5z","7z"],
       winning: "7z",
@@ -605,12 +605,12 @@ export const YAKU_LIST: YakuInfo[] = [
     ja: "緑一色",
     closedHan: null,
     openHan: null,
-    how: "整手牌只有 2/3/4/6/8 索和「发」",
+    how: "整手牌只有 2/3/4/6/8 条和「发」",
     exampleTiles: {
       concealed: ["2s","2s","2s","3s","3s","3s","4s","4s","4s","6s","6s","6s","8s"],
       winning: "8s",
     },
-    exampleNote: "只有绿色的索子（23468索）与「发」",
+    exampleNote: "只有绿色的条子（23468条）与「发」",
     group: "役满",
   },
   {

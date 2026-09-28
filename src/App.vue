@@ -104,6 +104,18 @@ const issues = computed(() =>
 const canScore = computed(() => handReady.value && issues.value.length === 0);
 
 /**
+ * 「下一步」按钮的文案。
+ *
+ * 必须分清「还没录完」和「录完了但牌形不成立」—— 后者说「先把牌录完」是错的，
+ * 用户会以为自己数错了张数，一个劲儿往牌表里补牌。
+ */
+const nextLabel = computed(() => {
+  if (handReady.value) return "下一步：设场况";
+  if (isComplete(hand.value) && handBlocked.value) return "牌形不成立，先改牌";
+  return "先把牌录完";
+});
+
+/**
  * 手牌 + 副露里每种牌有几张（键是归一后的牌面）。
  *
  * 传给场况面板，用来实现「同一张牌（手牌 + 副露 + 表宝 + 里宝）≤ 4 张」——
@@ -187,28 +199,17 @@ async function buildFailSheet(kind: string): Promise<Extract<Sheet, { kind: "fai
   }
 
   // 牌形不成立：引擎只吐一句英文，用户看完还是不知道改什么。
-  // 这里给出确定性的具体问题（换哪张 / 是不是撞了宝牌 / 凑出几组）。
+  // 这里给出确定性的具体问题（换哪张就能和牌 / 是不是撞了宝牌 / 凑出几组）。
   if (kind === "invalid-hand") {
     try {
       const d = await diagnoseInvalidHand(hand.value, game.value);
       verdict = d.verdict;
       problems = d.problems;
-      if (d.winningFix) {
-        // 换和牌张就能成立 —— 归到 fixes 里，复用同一套「怎么改」的样式
-        fixes = [
-          {
-            text: `把「和牌张」从 ${tileLabel(d.winningFix.from)} 改成 ${tileLabel(
-              d.winningFix.to,
-            )}`,
-            patch: {}, // 牌形问题不是改场况能解决的，所以不给 patch
-            yaku: [],
-            confidence: "likely",
-          },
-        ];
-        verdictKind = "shape";
-      } else {
-        verdictKind = "shape";
-      }
+      // 换牌建议走和「无役」同一套渲染 —— 它们是同一件事：
+      // 「换成这张，牌形成立**而且**有役」。诊断层已经保证过这一点，
+      // 不会再把「换完还是无役」的假建议塞进来。
+      tileSwaps = d.swaps;
+      verdictKind = "shape";
     } catch (e) {
       console.error("[牌形诊断失败]", e);
     }
@@ -346,7 +347,7 @@ function editGame() {
         :disabled="!handReady"
         @click="goSettings"
       >
-        {{ handReady ? "下一步：设场况" : "先把牌录完" }}
+        {{ nextLabel }}
       </button>
       <template v-else>
         <button type="button" class="btn" @click="backToHand">改牌</button>

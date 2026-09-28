@@ -16,7 +16,7 @@
  *    引擎给的答案必然一样，那个循环永远不会命中。
  *    必须**替换成别的牌面**才真的改变多重集。
  */
-import { addTile, createEmptyHand, type HandState } from "../hand-state.ts";
+import { addMeld, addTile, createEmptyHand, type HandState } from "../hand-state.ts";
 import { createDefaultGameState, type GameState } from "../game-state.ts";
 import { buildHandInput } from "../build-input.ts";
 import { score } from "../../score/index.ts";
@@ -187,6 +187,34 @@ await test("七对子牌形被识别（不给「不成立」的结论）", async
   const r = await score(built.input);
   const isInvalid = "error" in r && r.error.kind === "invalid-hand";
   ok(!isInvalid, "七对子是合法牌形，不该报「不成立」");
+});
+
+// ============================================================
+console.log("\n【6】★ 换牌建议必须「换完真的能和牌」");
+// ============================================================
+
+await test("用户报的原案：345p(吃) + 888p(碰) + 1m1m2m3m5m6m7m + 和牌张 6s", async () => {
+  // 旧版会建议「把 1万 换成 6条」—— 换完是 123m + 567m + 66s + 345p + 888p：
+  // 牌形**是**成立了，但两组副露 + 手里还留着一张 1万，**依然无役**，白改一遍。
+  // 现在换牌建议只从「过了一遍引擎」的搜索结果里来，这种假建议不可能再出现。
+  let hand = createEmptyHand();
+  hand = addMeld(hand, ["3p", "4p", "5p"]);
+  hand = addMeld(hand, ["8p", "8p", "8p"]);
+  hand = feed(hand, ["1m", "1m", "2m", "3m", "5m", "6m", "7m"]);
+  hand = addTile(hand, "6s");
+
+  await assertInvalid(hand, baseGame());
+
+  const d = await diagnoseInvalidHand(hand, baseGame());
+  ok(!d.verdict.includes("6条"), `不该再出现「换成 6条」的假建议，实际：${d.verdict}`);
+  for (const s of d.swaps) {
+    ok(s.yaku.length > 0, `建议「${s.from} → ${s.to}」必须带役名，不能只说牌形成立`);
+    ok(s.han > 0, `建议「${s.from} → ${s.to}」必须有番数`);
+  }
+  if (d.swaps.length === 0) {
+    ok(d.verdict.includes("换单张牌"), `没有可用建议时要明说，实际：${d.verdict}`);
+  }
+  console.log(`        （${d.verdict}）`);
 });
 
 // ============================================================

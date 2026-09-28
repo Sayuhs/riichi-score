@@ -105,7 +105,7 @@ await test("有牌状态渲染出正确图片路径", async () => {
   };
   const html = await renderToString(createSSRApp(App));
   ok(html.includes("tiles/Red/Man1.svg"), "1m 路径 ");
-  ok(html.includes("tiles/Red/Pin5-Dora.svg"), "赤5筒应指向 -Dora 文件 ");
+  ok(html.includes("tiles/Red/Pin5-Dora.svg"), "赤5饼应指向 -Dora 文件 ");
   ok(html.includes("tiles/Red/Haku.svg"), "白应指向 Haku ");
 });
 
@@ -169,12 +169,12 @@ await test("牌表覆盖 34 种牌 + 3 张赤 5", () => {
 });
 
 await test("牌表 5 行，一行一个花色，每行不超 9 张", () => {
-  eq(PICKER_ROWS.length, 5, "5 行（万筒索字赤5）");
+  eq(PICKER_ROWS.length, 5, "5 行（万饼条字赤5）");
   for (const row of PICKER_ROWS) ok(row.length <= 9, `每行不超 9 张，实际 ${row.length} `);
-  // 前 4 行分别是万筒索字
+  // 前 4 行分别是万饼条字
   eq(PICKER_ROWS[0]![0], "1m", "第 1 行是万");
-  eq(PICKER_ROWS[1]![0], "1p", "第 2 行是筒");
-  eq(PICKER_ROWS[2]![0], "1s", "第 3 行是索");
+  eq(PICKER_ROWS[1]![0], "1p", "第 2 行是饼");
+  eq(PICKER_ROWS[2]![0], "1s", "第 3 行是条");
   eq(PICKER_ROWS[3]![0], "1z", "第 4 行是字");
   eq(PICKER_ROWS[4], ["0m", "0p", "0s"], "第 5 行是赤 5");
 });

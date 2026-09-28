@@ -121,20 +121,28 @@ test("换和牌张：清掉和牌张 → 门前不满 → 再点一张自动成�
   eq(isComplete(s), true, "仍完整");
 });
 
-test("换门前牌：点掉一张 → 门前变 12 → 点新的补回门前", () => {
+test("撤回门前牌：和牌张一并重置（补录后要重新点最后一张）", () => {
   let s = feed(createEmptyHand(), [...THIRTEEN, "9s"]);
   eq(s.concealed.length, 13, "门前 13");
+  eq(s.winningTile, "9s", "初始和牌张 9s");
 
-  // 点掉一张门前牌
+  // 点掉一张门前牌 —— 撤回之后门前不再满员，「和牌张已认定」的前提就没了
   s = removeConcealedAt(s, 0);
   eq(s.concealed.length, 12, "门前 12");
-  eq(s.winningTile, "9s", "和牌张不受影响");
+  eq(s.winningTile, null, "★ 和牌张一并重置（它已经不是「最后点的那张」了）");
+  ok(s.notice !== null, "要留一句提示，告诉用户和牌张被重置了");
   eq(isComplete(s), false, "不完整了");
 
   // 补一张 —— 门前还不满，所以进门前而不是和牌张
   s = addTile(s, "5s");
   eq(s.concealed.length, 13, "补回门前 13");
-  eq(s.winningTile, "9s", "和牌张仍是 9s");
+  eq(s.winningTile, null, "补进去的那张不会自己变成和牌张");
+  eq(isComplete(s), false, "还差和牌张");
+
+  // 再点一张才是新的和牌张
+  s = addTile(s, "9s");
+  eq(s.winningTile, "9s", "重新点出来的和牌张");
+  eq(s.concealed.length, 13, "和牌张不占门前");
   eq(isComplete(s), true, "又完整了");
 });
 
@@ -218,15 +226,20 @@ test("录 13 张 → 第 14 张自动和牌 → 点掉两张 → 重录", () => 
   s = removeConcealedAt(s, s.concealed.length - 1);
   s = removeConcealedAt(s, s.concealed.length - 1);
   eq(s.concealed.length, 11, "回到 11 张");
-  // 和牌张还在（没被影响）
-  eq(s.winningTile, "9s", "和牌张仍是 9s");
+  // ★ 撤回就把和牌张一起重置了 —— 补录的那两张里，本来就有一张该当和牌张
+  eq(s.winningTile, null, "和牌张也重置了");
 
   // 重录正确的那两张到门前
   s = addTile(s, "5p");
   s = addTile(s, "6p");
   eq(s.concealed.length, 13, "补回 13");
+  eq(s.winningTile, null, "补录的牌只进门前");
+  eq(isComplete(s), false, "还差一张和牌张");
+
+  // 真正和的那张（最后点的）才成为和牌张
+  s = addTile(s, "9s");
   eq(isComplete(s), true, "完整");
-  eq(s.winningTile, "9s", "和牌张不变");
+  eq(s.winningTile, "9s", "和牌张");
 });
 
 // ============================================================

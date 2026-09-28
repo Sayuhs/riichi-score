@@ -28,7 +28,8 @@ import type { GameState } from "./game-state.ts";
 import { buildHandInput } from "./build-input.ts";
 import { score } from "../score/index.ts";
 import { formatSandboxResult } from "./sandbox-result.ts";
-import { precheckHand, type PrecheckResult } from "./hand-precheck.ts";
+import { precheckBlocks, precheckHand, type PrecheckResult } from "./hand-precheck.ts";
+import { isWinningShape } from "./hand-shape.ts";
 import { tileLabel } from "./tiles.ts";
 import type { ScoreError, ScoreResult } from "../score/types.ts";
 import {
@@ -159,6 +160,13 @@ function reset() {
 const expected = computed(() => expectedConcealedCount(state.value.melds));
 const remaining = computed(() => remainingSlots(state.value));
 const complete = computed(() => isComplete(state.value));
+/**
+ * 牌形成不成立 —— **只看牌形，不看有没有役**（役是场况的函数，不是牌形的性质）。
+ *
+ * 「凑齐了」不能只说张数：张数对了而牌形不成立时，那个绿灯就是在骗人 ——
+ * 用户会一路走到算番才发现，而引擎那时只吐一句英文。
+ */
+const shapeOk = computed(() => !complete.value || isWinningShape(state.value));
 const hasWinning = computed(() => state.value.winningTile !== null);
 const awaitingWinning = computed(
   () => !hasWinning.value && state.value.concealed.length >= expected.value,
@@ -231,8 +239,8 @@ function declineKan(tile: string) {
  */
 const noticeText = computed(() => {
   if (state.value.notice) return state.value.notice;
-  // 预检的警告优先于「已凑齐」—— 凑齐了但没役，说「已凑齐」是误导
-  if (precheck.value.kind === "hopeless" || precheck.value.kind === "context-hint") {
+  // 预检的提示优先于「已凑齐」—— 凑齐了但牌形不成立 / 没役，说「已凑齐」是误导
+  if (precheck.value.kind !== "idle" && precheck.value.kind !== "ok") {
     return precheck.value.text;
   }
   if (complete.value) return "已凑齐，去下面设置场况后算番";
@@ -381,7 +389,7 @@ watch(
         isMenzen: isMenzenHand.value,
       });
       precheck.value = r;
-      emit("precheck", r.kind === "hopeless");
+      emit("precheck", precheckBlocks(r.kind));
     } catch (e) {
       console.error("[预检失败]", e);
       precheck.value = { kind: "ok", text: "", swaps: [] };
@@ -426,8 +434,9 @@ watch(
 
 /** 沙盒那一行要显示的文字（永远非空，保证固定高度不抖） */
 const sandbox = computed(() => {
-  // 没役时优先显示换牌建议 —— 它比试算结果更该看（而且复用同一个固定高度的槽）
-  if (precheck.value.kind === "hopeless" && precheck.value.swaps.length) {
+  // 牌形不成立 / 没役时优先显示换牌建议 —— 它比试算结果更该看
+  // （而且复用同一个固定高度的槽）
+  if (precheck.value.swaps.length) {
     const s = precheck.value.swaps[0]!;
     return {
       text: `试：把 ${tileLabel(s.from)} 换成 ${tileLabel(s.to)} → ${s.yaku.join("、")} ${s.han} 番`,
@@ -439,7 +448,9 @@ const sandbox = computed(() => {
 
 const noticeClass = computed(() => {
   if (state.value.notice) return "notice-warn";
-  if (precheck.value.kind === "hopeless") return "notice-warn";
+  if (precheck.value.kind === "hopeless" || precheck.value.kind === "invalid-shape") {
+    return "notice-warn";
+  }
   if (precheck.value.kind === "context-hint") return "notice-ok";
   if (complete.value) return "notice-ok";
   return "notice-quiet";
@@ -455,7 +466,8 @@ const noticeClass = computed(() => {
              逻辑张数（引擎的 14，把每个杠折算成 3 张）不显示 ——
              给用户看只会造成困惑，之前那句「录满了（14 张）」就是这么把他绕进去的。 -->
         <span class="count">{{ physical }}<i>/{{ physicalTarget }}</i></span>
-        <span v-if="complete" class="tag tag-ok">凑齐了</span>
+        <span v-if="complete && shapeOk" class="tag tag-ok">凑齐了</span>
+        <span v-else-if="complete" class="tag tag-bad">牌形不成立</span>
         <span v-else-if="awaitingWinning" class="tag tag-pink">点最后一张</span>
       </div>
       <button type="button" class="btn btn-cyan" title="役种速查" @click="emit('openGuide')">
@@ -729,6 +741,11 @@ const noticeClass = computed(() => {
 }
 .tag-ok {
   background: var(--pop-green);
+}
+/* 「张数够了、但牌形不成立」—— 绿灯不能亮，也不该用代表「还要录」的粉 */
+.tag-bad {
+  background: var(--pop-orange);
+  color: #fff;
 }
 
 /* ---------------- 钉住区 ---------------- */

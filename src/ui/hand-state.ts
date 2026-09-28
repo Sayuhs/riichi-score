@@ -185,12 +185,34 @@ export function countKind(state: HandState, tile: string): number {
   return all.filter((t) => norm(t) === target).length;
 }
 
+/**
+ * 撤回（删掉）任意一张牌之后的收尾。
+ *
+ * ⚠️ 和牌张必须**一起清掉**，不能留着。
+ *
+ * 和牌张是「门前满员之后再点的那张」**自动认定**的（见 `addTile`，Q9 A）。
+ * 撤回一张牌之后门前就不再满员，那份认定的前提已经不存在了：
+ * 用户补录的那张会进门前（而不是当和牌张），于是状态悄悄错位 ——
+ * 界面上还挂着一个和牌张，但它已经不是「最后点的那张」了。
+ *
+ * 而和牌张决定听牌形（两面 / 嵌张 / 边张 / 单骑），直接算错符数 ——
+ * 这种错很难靠肉眼发现，所以宁可让用户重新点一次。
+ */
+function afterWithdraw(state: HandState): Pick<HandState, "winningTile" | "notice"> {
+  return {
+    winningTile: null,
+    notice: state.winningTile
+      ? "已撤掉一张牌，和牌张也一并重置了 —— 请重新点最后一张"
+      : null,
+  };
+}
+
 /** 删除门前牌中指定下标的一张（Q19：必须能单张删，否则点错只能全清） */
 export function removeConcealedAt(state: HandState, index: number): HandState {
   if (index < 0 || index >= state.concealed.length) return state;
   const next = [...state.concealed];
   next.splice(index, 1);
-  return { ...state, concealed: next, notice: null, textErrors: [] };
+  return { ...state, concealed: next, ...afterWithdraw(state), textErrors: [] };
 }
 
 /**
@@ -431,9 +453,20 @@ export function addMeld(state: HandState, tiles: string[]): HandState {
   };
 }
 
-/** 删除一组副露 */
+/**
+ * 删除一组副露。
+ *
+ * 副露少一组 → 门前要多 3 张，同样会把「和牌张已经认定过」这个前提打掉，
+ * 所以和牌张一起重置（理由见 `afterWithdraw`）。
+ */
 export function removeMeld(state: HandState, id: number): HandState {
-  return { ...state, melds: state.melds.filter((m) => m.id !== id), notice: null };
+  if (!state.melds.some((m) => m.id === id)) return state;
+  return {
+    ...state,
+    melds: state.melds.filter((m) => m.id !== id),
+    ...afterWithdraw(state),
+    textErrors: [],
+  };
 }
 
 /** 修改副露类型（暗杠 vs 明杠的符数不同，必须让用户能改） */

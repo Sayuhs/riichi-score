@@ -240,6 +240,12 @@ export interface TileSwap {
  * 这个搜索是**确定性**的（476 次组合全试），不是启发式。
  * 引擎一次算番约 0.28ms，所以整体约 130ms —— 可接受。
  *
+ * ## 这也是「换牌建议」的**唯一**入口
+ *
+ * 两个场景共用它：无役（`diagnoseNoYaku`）、牌形不成立（`diagnoseInvalidHand`）。
+ * 后者**绝不能**只判「牌形成立」就报建议 —— 换完仍然无役的话用户白改一遍，
+ * 所以每条候选都必须过一遍引擎，两条淘汰线缺一不可。
+ *
  * ## 为什么之前没做
  *
  * 早期调研用**一手特定的无役牌**试过单张换牌，命中 0 条，据此判断「覆盖率低」。
@@ -249,6 +255,7 @@ export interface TileSwap {
 export async function findTileSwaps(
   hand: HandState,
   game: GameState,
+  opts: { limit?: number } = {},
 ): Promise<TileSwap[]> {
   // ⚠️ 只用「门前 + 和牌张」这些**自己能改的牌**，不含副露。
   //    有副露时这里是 11 张（不是 14）—— 早期版本写死了 14，
@@ -293,13 +300,14 @@ export async function findTileSwaps(
     return 0;
   });
 
-  // 同一个「换掉的牌」只留最好的一条，避免刷屏
+  // 同一组（换掉的牌 → 换成什么）只留最好的一条，避免刷屏
   const byFrom = new Map<string, TileSwap>();
   for (const f of found) {
     const key = `${f.from}->${f.to}`;
     if (!byFrom.has(key)) byFrom.set(key, f);
   }
-  return [...byFrom.values()].slice(0, 6);
+  // 默认只留 6 条给弹窗；调用方要「从全量里挑出换和牌张那一条」时可以放开
+  return [...byFrom.values()].slice(0, opts.limit ?? 6);
 }
 
 /**

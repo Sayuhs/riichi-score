@@ -11,7 +11,7 @@
  * 以及把副露的括号结构解析出来。规则校验交给 Scorer。
  */
 
-/** 花色：万 / 筒 / 索 / 字 */
+/** 花色：万 / 饼 / 条 / 字 */
 export type Suit = "m" | "p" | "s" | "z";
 
 /** 解析错误，带位置信息，便于 UI 精确标出哪一段有问题 */
@@ -59,7 +59,7 @@ export function normalizeRedFive(token: string): string {
 }
 
 /**
- * 牌的排序权重：万 < 筒 < 索 < 字，同花色按数字（赤 5 排在 5 的位置）
+ * 牌的排序权重：万 < 饼 < 条 < 字，同花色按数字（赤 5 排在 5 的位置）
  */
 export function tileSortKey(token: string): number {
   const suitOrder: Record<Suit, number> = { m: 0, p: 1, s: 2, z: 3 };
@@ -69,7 +69,7 @@ export function tileSortKey(token: string): number {
   return suitOrder[suit] * 100 + rank;
 }
 
-/** 按天凤习惯排序（万筒索字，同花色从小到大） */
+/** 按天凤习惯排序（万饼条字，同花色从小到大） */
 export function sortTiles(tiles: string[]): string[] {
   return [...tiles].sort((a, b) => tileSortKey(a) - tileSortKey(b) || a.localeCompare(b));
 }
@@ -379,13 +379,16 @@ export const TILE_LABELS: Record<string, string> = {
 
 /**
  * 牌的显示名。
- * 数牌用 `1万`/`2筒`/`3索`，字牌用中文，赤 5 前缀 `赤`。
+ * 数牌用 `1万`/`2饼`/`3条`，字牌用中文，赤 5 前缀 `赤`。
+ *
+ * 用词按口语习惯定：**万 / 饼 / 条**（不是「万 / 筒 / 索」）——
+ * 牌面图画的就是「饼」「条」，文字跟着走才不会有「看着是饼、写着是筒」的割裂。
  */
 export function tileLabel(token: string): string {
   const rank = token[0]!;
   const suit = token[1]!;
   if (suit === "z") return TILE_LABELS[token] ?? token;
-  const suitName = { m: "万", p: "筒", s: "索" }[suit as "m" | "p" | "s"] ?? suit;
+  const suitName = { m: "万", p: "饼", s: "条" }[suit as "m" | "p" | "s"] ?? suit;
   if (rank === "0") return `赤5${suitName}`;
   return `${rank}${suitName}`;
 }

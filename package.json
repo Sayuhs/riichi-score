@@ -9,7 +9,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "test": "node --experimental-strip-types src/score/__tests__/run.ts && node --experimental-strip-types src/score/__tests__/m1.test.ts && node --experimental-strip-types src/ui/__tests__/m2.test.ts && node --experimental-strip-types src/ui/__tests__/m2-rev.test.ts && node --experimental-strip-types src/ui/__tests__/m3.test.ts && node --experimental-strip-types src/ui/__tests__/m3-polish.test.ts && node --experimental-strip-types src/ui/__tests__/yaku-guide.test.ts && node --experimental-strip-types src/ui/__tests__/render.test.ts && node --experimental-strip-types src/ui/__tests__/result-view.test.ts && node --experimental-strip-types src/ui/__tests__/dora-picker.test.ts && node --experimental-strip-types src/ui/__tests__/labels.test.ts && node --experimental-strip-types src/ui/__tests__/kan.test.ts && node --experimental-strip-types src/ui/__tests__/no-yaku.test.ts && node --experimental-strip-types src/ui/__tests__/sandbox.test.ts && node --experimental-strip-types src/ui/__tests__/invalid-hand.test.ts && node --experimental-strip-types src/ui/__tests__/precheck.test.ts && node --experimental-strip-types src/ui/__tests__/meld.test.ts",
+    "test": "node --experimental-strip-types src/score/__tests__/run.ts && node --experimental-strip-types src/score/__tests__/m1.test.ts && node --experimental-strip-types src/ui/__tests__/m2.test.ts && node --experimental-strip-types src/ui/__tests__/m2-rev.test.ts && node --experimental-strip-types src/ui/__tests__/m3.test.ts && node --experimental-strip-types src/ui/__tests__/m3-polish.test.ts && node --experimental-strip-types src/ui/__tests__/yaku-guide.test.ts && node --experimental-strip-types src/ui/__tests__/render.test.ts && node --experimental-strip-types src/ui/__tests__/result-view.test.ts && node --experimental-strip-types src/ui/__tests__/dora-picker.test.ts && node --experimental-strip-types src/ui/__tests__/labels.test.ts && node --experimental-strip-types src/ui/__tests__/kan.test.ts && node --experimental-strip-types src/ui/__tests__/no-yaku.test.ts && node --experimental-strip-types src/ui/__tests__/sandbox.test.ts && node --experimental-strip-types src/ui/__tests__/hand-shape.test.ts && node --experimental-strip-types src/ui/__tests__/invalid-hand.test.ts && node --experimental-strip-types src/ui/__tests__/precheck.test.ts && node --experimental-strip-types src/ui/__tests__/meld.test.ts",
     "test:honba": "node --experimental-strip-types src/score/__tests__/run.ts",
     "test:m1": "node --experimental-strip-types src/score/__tests__/m1.test.ts",
     "test:m2": "node --experimental-strip-types src/ui/__tests__/m2.test.ts",
@@ -24,6 +24,7 @@
     "test:kan": "node --experimental-strip-types src/ui/__tests__/kan.test.ts",
     "test:noyaku": "node --experimental-strip-types src/ui/__tests__/no-yaku.test.ts",
     "test:sandbox": "node --experimental-strip-types src/ui/__tests__/sandbox.test.ts",
+    "test:shape": "node --experimental-strip-types src/ui/__tests__/hand-shape.test.ts",
     "test:invalid": "node --experimental-strip-types src/ui/__tests__/invalid-hand.test.ts",
     "test:precheck": "node --experimental-strip-types src/ui/__tests__/precheck.test.ts",
     "test:meld": "node --experimental-strip-types src/ui/__tests__/meld.test.ts",

@@ -17,15 +17,19 @@
  * 也就永远勾不上立直 —— 这手牌直接卡死。而现实中「无役」绝大多数
  * 恰恰就是忘了勾立直。
  *
- * ## 所以分成三档
+ * ## 所以分成四档
  *
  * | 预检结果 | 含义 | 界面 |
  * |---------|------|------|
  * | `ok` | 当前场况就有役 | 正常，不打扰 |
  * | `context-hint` | 当前没役，但**勾上某个开关就有** | **允许下一步**，提示「记得勾立直」 |
  * | `hopeless` | 试遍常见场况变体都没役 | **拦住**，要求换牌，并直接给换牌建议 |
+ * | `invalid-shape` | 牌形根本不成立 | **拦住**，换牌是唯一出路 |
  *
- * 只有 `hopeless` 才拦 —— 那时换牌确实是唯一出路，符合「没役就只能换牌」的直觉。
+ * 只有 `hopeless` 与 `invalid-shape` 才拦 —— 这两档换牌确实是唯一出路。
+ *
+ * ⚠️ 「牌形不成立」必须先于「有没有役」判：牌形都不成立时谈役毫无意义，
+ *    而且等用户走到算番才报错，做的就是白跑一趟（引擎还只吐英文）。
  */
 import type { GameState } from "./game-state.ts";
 import type { HandState } from "./hand-state.ts";
@@ -33,8 +37,19 @@ import { buildHandInput } from "./build-input.ts";
 import { isComplete } from "./hand-state.ts";
 import { score } from "../score/index.ts";
 import { findTileSwaps, type TileSwap } from "./no-yaku-advice.ts";
+import { isWinningShape } from "./hand-shape.ts";
 
-export type PrecheckKind = "idle" | "ok" | "context-hint" | "hopeless";
+export type PrecheckKind = "idle" | "ok" | "context-hint" | "hopeless" | "invalid-shape";
+
+/**
+ * 这一档要不要拦住「下一步」。
+ *
+ * 「当前场况没役」（`context-hint`）**绝不能**拦 —— 拦了用户就永远进不去场况页、
+ * 也就勾不上立直，那手牌直接卡死。只有「换牌是唯一出路」的两档才拦。
+ */
+export function precheckBlocks(kind: PrecheckKind): boolean {
+  return kind === "hopeless" || kind === "invalid-shape";
+}
 
 export interface PrecheckResult {
   kind: PrecheckKind;
@@ -71,6 +86,21 @@ export async function precheckHand(
   opts: { isMenzen: boolean },
 ): Promise<PrecheckResult> {
   if (!isComplete(hand)) return IDLE;
+
+  // --- 牌形先过关，「有没有役」才有意义 ---
+  //
+  // 牌形不成立时算番必然失败。让用户走完「下一步 → 设场况 → 算番」才看到
+  // 一句英文报错，就是白跑一趟 —— 所以这里同步判掉、当场拦住。
+  if (!isWinningShape(hand)) {
+    const swaps = await findTileSwaps(hand, game);
+    return {
+      kind: "invalid-shape",
+      text: swaps.length
+        ? "牌形不成立（凑不成 4 组面子 + 1 对雀头）—— 换成下面的牌才有能和牌的牌形。"
+        : "牌形不成立（凑不成 4 组面子 + 1 对雀头），而且换单张牌也救不回来。",
+      swaps,
+    };
+  }
 
   // --- 当前场况 ---
   const built = buildHandInput(hand, game);
